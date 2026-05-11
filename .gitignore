@@ -25,8 +25,3 @@ Thumbs.db
 
 # Externe Quellen-Klone (nicht versionieren, gehören jeweiligem Upstream)
 research/
-
-# Interne Doku & Agent-Guidance — bleibt lokal, niemals auf public-Remote.
-# Public-Branch ('public') enthält diese Pfade per Konstruktion nicht.
-CLAUDE.md
-docs/_internal/
