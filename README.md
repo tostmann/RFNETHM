@@ -72,12 +72,15 @@ Mehrfach-Schreiber abgesichert (erster Sender bekommt den Stick für
 
 - **Funk-Hardware** (eine Variante):
   - HmIP-RFUSB-Stick (eq-3 Original, USB `1B1F:C020`), oder
-  - RPI-RF-MOD am 40-Pin-Header, oder
-  - HM-MOD-RPI-PCB am 40-Pin-Header
+  - RPI-RF-MOD am 40-Pin-Header — **braucht 5 V auf Header-Pin 2/4**
+    (eigener on-board-LDO, kein 3V3-Pfad), oder
+  - HM-MOD-RPI-PCB am 40-Pin-Header — 3,3 V auf Pin 1 reicht
 - **ESP32-S3-Devkit** mit nativem USB-OTG-PHY (z.B. YD-ESP32-S3 V1.4)
   und Pin-Header für den HM-Modul-Slot.  Ein eigenes PCB (ESP32-S3-MINI-1
   + W5500 + USB-A + HM-Slot) ist in Vorbereitung.
 - **5 V / 200 mA** Versorgung über die zweite USB-C-Buchse am Devkit.
+  Wer RPI-RF-MOD nutzt, muss zusätzlich 5 V auf den HM-Header (Pin 2/4)
+  durchziehen — siehe [`docs/breadboard_wiring.md`](docs/breadboard_wiring.md).
 - **WLAN** im Lab — Ethernet kommt mit dem eigenen PCB-Spin.
 
 ---

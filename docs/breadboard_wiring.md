@@ -35,7 +35,8 @@ RPi-RF-MOD-Pinout.
 
 | eQ3-Pin | RPi-BCM | Signal | Richtung | Welches Modul |
 |---|---|---|---|---|
-| 1 | 3V3 | Versorgung | — | beide |
+| 1 | 3V3 | Versorgung 3,3 V | — | **HM-MOD-RPI-PCB** (nutzt nur 3V3) |
+| 2, 4 | 5V | Versorgung 5 V | — | **RPI-RF-MOD** (hat eigenen LDO, kein 3V3-Pfad!) |
 | 6, 9, 14, 20, 25, 30, 34, 39 | GND | Masse | — | beide |
 | 8 | BCM14/TXD | **HM_RX** (Modul-Eingang) | MCU TX → Modul | beide |
 | 10 | BCM15/RXD | **HM_TX** (Modul-Ausgang) | Modul → MCU RX | beide |
@@ -67,12 +68,15 @@ Linie zurück in den Reset.
   RED=Pin 36, GREEN=Pin 38, BLUE=Pin 40
 
 Die zwei Module unterscheiden sich:
-- **HM-MOD-RPI-PCB** (BidCoS-only, ELV-Modul) — nutzt nur Pin 1, 8, 10,
-  11, 12 + GND.  RST = Pin 12.  Keine LEDs, kein BTN am Header.
-- **RPI-RF-MOD** (HmIP+BidCoS dual, A.R.s Folge-Hardware) — nutzt
-  zusätzlich Pin 32 (BTN), 35 (alt-Reset), 36/38/40 (RGB-LED).  Bei
-  diesem Modul ist Pin 35 die echte Reset-Linie (siehe
-  piVCCU/generic_raw_uart.c `use_alt_reset_pin`-Flag), Pin 12 wird
+- **HM-MOD-RPI-PCB** (BidCoS-only, ELV-Modul) — nutzt nur Pin 1 (3V3),
+  8, 10, 11, 12 + GND.  RST = Pin 12.  Keine LEDs, kein BTN am Header.
+- **RPI-RF-MOD** (HmIP+BidCoS dual, A.R.s Folge-Hardware) — wird **mit
+  5 V auf Pin 2/4** versorgt (eigener on-board-LDO macht intern die
+  3,3 V für EFM32 + CC1101).  Pin 1 (3V3) ist auf diesem Modul *nicht*
+  angeschlossen — wer 3V3 statt 5V auf den Header gibt, hat ein stummes
+  Modul.  Zusätzlich genutzt: Pin 32 (BTN), 35 (alt-Reset),
+  36/38/40 (RGB-LED).  Reset-Linie ist Pin 35 (siehe
+  piVCCU/generic_raw_uart.c `use_alt_reset_pin`-Flag), Pin 12 wird hier
   nicht für Reset verwendet.
 
 ## ESP32-S3-Pin-Mapping (YD V1.4 + N8 future-proof)
@@ -116,21 +120,28 @@ Pragmatischer Aufbau: 40-pin RPi-Female-Header über Steckdraht-Brücken
 auf das Breadboard, dort an die 22-pin J1-Buchse des YD-Devkits.  Modul
 sitzt im RPi-Header wie auf einer Pi.
 
-Mindest-Brücken (5 Drähte zum Modul + Power), Stand nach 2026-05-07
-Korrektur:
+Mindest-Brücken zum Modul (Power abhängig vom Modul-Typ):
 
 ```
-YD-J1         eQ3-Header
-─────         ──────────
-J1/1 3V3 ─────► Pin 1 (3V3)
-J1/22 GND ────► Pin 6 (GND)  + Pin 9, 14, 20, 25, 30, 34, 39 (Stern)
-J1/10 GPIO17 ─► Pin 8  (HM_RX)
-J1/11 GPIO18 ─► Pin 10 (HM_TX)
-J1/9  GPIO16 ─► Pin 12 (HM_RST,    HM-MOD-RPI-PCB)
-J1/7  GPIO7  ─► Pin 35 (HM_RST_INV, RPI-RF-MOD alt-Reset)
+YD-Devkit                eQ3-Header
+─────────                ──────────
+3V3   (J1/1)        ───► Pin 1  (3V3)    [nur HM-MOD-RPI-PCB]
+5V    (VBUS / J3 5V)───► Pin 2  (5V)     [nur RPI-RF-MOD — Pflicht!]
+GND   (J1/22)       ───► Pin 6  (GND) + Stern auf 9, 14, 20, 25, 30, 34, 39
+GPIO17 (J1/10)      ───► Pin 8  (HM_RX)
+GPIO18 (J1/11)      ───► Pin 10 (HM_TX)
+GPIO16 (J1/9)       ───► Pin 12 (HM_RST,    HM-MOD-RPI-PCB, active-LOW)
+GPIO7  (J1/7)       ───► Pin 35 (HM_RST_INV, RPI-RF-MOD,    active-HIGH)
 ```
 
-Optional, falls RPI-RF-MOD-Tests anstehen (LEDs+BTN):
+Die 5 V kommen am YD-ESP32-S3-COREBOARD V1.4 direkt aus der USB-C-
+Power-Buchse (an einigen Pads / am 5V-Pin der Stiftleiste abgreifbar
+— vor Crimpen mit Multimeter gegen den USB-Power-Eingang durchklingeln).
+Aus 5 V wird am RPI-RF-MOD intern via on-board-LDO die 3,3 V für
+EFM32+CC1101 erzeugt; deshalb braucht das Modul keine 3V3-Leitung
+und ist auch nicht damit zu versorgen.
+
+Optional, falls RPI-RF-MOD-Tests mit LEDs+BTN anstehen:
 
 ```
 J1/8  GPIO15 ─► Pin 32 (HM_BTN)
@@ -144,9 +155,17 @@ würde ein MCU-Output dort die SiLabs-C2-Debug-Daten-Linie stören.
 
 ## Versorgungs-Hygiene
 
-- **3V3 vom YD-Devkit** speist das HM-Modul direkt.  YD V1.4 hat einen
-  CJ6107A33 LDO mit ausreichend Reserve für ein Sub-GHz-Modul, das im
-  TX-Burst <50 mA zieht.
+- **HM-MOD-RPI-PCB**: 3,3 V vom YD-Devkit (J1/1, CJ6107A33-LDO am
+  Devkit) auf eQ3-Pin 1.  TX-Burst zieht <50 mA, der LDO hat ausreichend
+  Reserve.
+- **RPI-RF-MOD**: **5 V Pflicht** (USB-Power-Schiene des YD) auf
+  eQ3-Pin 2 (oder Pin 4).  Das Modul hat einen eigenen on-board-LDO
+  und schaltet daraus seine internen 3,3 V.  Eine 3V3-Speisung am
+  Header-Pin 1 reicht **nicht** und wird auch nicht intern weiter-
+  geleitet — das Modul bleibt schlicht stumm.  Wer beide Module
+  abwechselnd am gleichen Header benutzt, kann beide Pfade parallel
+  verkabeln (Pin 1 = 3V3, Pin 2/4 = 5V); die Module belegen jeweils
+  nur ihren eigenen.
 - **GND-Stern**: das Modul hat 8 GND-Pins am Header — mind. zwei davon
   zum YD durchziehen, Rückleiter direkt vom HM-RX-/HM-TX-Pin-Cluster.
 - **Antennen-Massnahme**: auf dem Breadboard ist die HF-Antenne an
