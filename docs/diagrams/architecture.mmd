@@ -1,0 +1,45 @@
+%%{init: {'theme':'neutral'}}%%
+%% RFNETHM — Top-Level-Architektur (v0.14.55)
+%% Eine Source (USB-Host am HmIP-RFUSB-Stick), eine Bridge,
+%% N Sinks die Frames in unterschiedlichen Wireformaten rausreichen.
+
+flowchart LR
+    subgraph Stick["HmIP-RFUSB-Stick (1B1F:C020)"]
+        EFM["EFM32G220<br/>DualCoPro_App"]
+        CP["CP2102N<br/>Vendor-EP"]
+        EFM <--> CP
+    end
+
+    CP <-->|USB-OTG-FS| SRC
+
+    subgraph RFNETHM["RFNETHM (ESP32-S3 + 8 MB Flash)"]
+        direction LR
+        SRC["source_usb<br/>HMUARTLGW-Codec<br/>CRC16-0x8005"]
+        BR{{"bridge.c<br/>fanout + TX-master-lock"}}
+        SRC <--> BR
+
+        subgraph Sinks
+            direction TB
+            S1["sink_debug<br/>console-tee"]
+            S2["sink_hbrfeth<br/>UDP/3008"]
+            S3["sink_tcp<br/>TCP/2329 raw-uart"]
+            S4["sink_hmu_legacy<br/>TCP/2330 HM-MOD-RPI"]
+        end
+        BR --> S1 & S2 & S3 & S4
+
+        WEB["webui<br/>HTTP/80<br/>/api/status<br/>/api/bridge/master"]
+        WEB -.->|read state| BR
+    end
+
+    S2 <-->|HB-RF-ETH wire| K1["hb_rf_eth.ko<br/>+ rfd / multimacd<br/>(piVCCU, RaspberryMatic)"]
+    S3 <-->|raw bytes| K2["bmcond / Homegear<br/>raw-uart-Pfad"]
+    S4 <-->|HMUARTLGW frames| K3["FHEM CUL_HM<br/>Homegear / rfd"]
+
+    classDef stick fill:#fef3c7,stroke:#d97706,stroke-width:2px;
+    classDef rfnethm fill:#dbeafe,stroke:#2563eb,stroke-width:2px;
+    classDef sink fill:#dcfce7,stroke:#16a34a;
+    classDef client fill:#fce7f3,stroke:#db2777;
+    class EFM,CP stick;
+    class SRC,BR,WEB rfnethm;
+    class S1,S2,S3,S4 sink;
+    class K1,K2,K3 client;

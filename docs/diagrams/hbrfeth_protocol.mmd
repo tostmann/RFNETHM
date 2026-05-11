@@ -1,0 +1,44 @@
+%%{init: {'theme':'neutral'}}%%
+%% HB-RF-ETH-UDP/3008 Wire-Protocol — A.R.s `hb_rf_eth.ko` als Client
+%% Type-Codes: 0=KEEPALIVE, 1=CONNECT-V1, 2=DISCONNECT, 3=FRAME(?),
+%%             7=FRAME, 8=CONNECT-V2 (mit ep_id-Echo)
+%% Quirks: ephemerer src-port pro try_connect, len==7-strict, mirror-cnt-Check
+
+sequenceDiagram
+    participant Krn as hb_rf_eth.ko<br/>(Linux Kernel)
+    participant US as bmcond / multimacd<br/>(Userspace)
+    participant Stick as RFNETHM<br/>sink_hbrfeth (UDP:3008)
+
+    Note over Krn,Stick: Discovery: mDNS _hbrfeth._udp.local
+
+    rect rgb(238, 246, 255)
+        Note over Krn,Stick: V2-CONNECT-Handshake
+        Krn->>Stick: CONNECT-V2 [type=8, cnt, ep_id=0]<br/>(ephemerer src-port!)
+        Stick->>Stick: ep_id ← random(),<br/>session ← active
+        Stick-->>Krn: CONNECT-V2-ACK<br/>[type=8, cnt-mirror, ep_id]
+        Note over Krn: kernel buffert ep_id<br/>für nächstes Reboot-Resume
+    end
+
+    rect rgb(254, 252, 232)
+        Note over Krn,Stick: KeepAlive-Loop (1 Hz)
+        loop alle 1 s
+            Krn->>Stick: KEEPALIVE [type=0, cnt]
+            Stick-->>Krn: KEEPALIVE-MIRROR<br/>[type=0, cnt-mirror]
+        end
+        Note over Stick: 5 s ohne KA → session=stale<br/>aber NICHT closed
+    end
+
+    rect rgb(232, 252, 240)
+        Note over Krn,Stick: HM-Frame-Verkehr
+        Krn->>Stick: FRAME [type=7, cnt, payload]
+        Stick->>Stick: bridge_tx_to_source()
+        Stick-->>Krn: FRAME-ACK + RX-Frames<br/>(out-of-band, type=7)
+    end
+
+    rect rgb(254, 240, 240)
+        Note over Krn,Stick: Reboot-Resume (V0.12-Fix)
+        Note over Stick: ESP32 reboot — neuer ep_id-Pool
+        Krn->>Stick: CONNECT-V2 [ep_id=alt]
+        Note over Stick: client_ep != 0 →<br/>Session-Resume akzeptiert<br/>(neue ep_id zurückgeschickt)
+        Stick-->>Krn: CONNECT-V2-ACK [ep_id=neu]
+    end

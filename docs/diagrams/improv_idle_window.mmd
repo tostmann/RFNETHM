@@ -1,0 +1,43 @@
+%%{init: {'theme':'neutral'}}%%
+%% Improv-Serial-Window — improv_glue.cpp (v0.14.55)
+%% Idle-basiert: jede UART-Aktivität resettet den Timer.
+%% Initial-Idle conditional: 30s mit Creds / 120s ohne.
+
+stateDiagram-v2
+    [*] --> Boot
+
+    state Boot {
+        [*] --> CheckCreds: improv_init()
+        CheckCreds --> Fresh: net_has_creds()=false
+        CheckCreds --> HasCreds: net_has_creds()=true
+        Fresh --> [*]: idle_ms = 120s<br/>s_armed = true
+        HasCreds --> [*]: idle_ms = 30s<br/>s_armed = true
+    }
+
+    Boot --> ARMED: net_set_external_control(true)<br/>improv_task() spawned
+
+    state ARMED {
+        [*] --> WaitingBytes
+        WaitingBytes --> WaitingBytes: tick(now_ms)<br/>(Lib heartbeat)
+        WaitingBytes --> ActivityReset: UART-Byte empfangen
+        ActivityReset --> WaitingBytes: s_last_activity_us = now<br/>feedBytes() to Lib
+        WaitingBytes --> Provisioned: onConnected("ssid","psk")
+    }
+
+    Provisioned --> ARMED: net_persist_creds()<br/>STA bleibt up — Window läuft<br/>weiter bis Idle-Timeout
+
+    ARMED --> Closed: idle_us > idle_ms<br/>OR Lib.isArmed() = false<br/>OR LIB_WINDOW_MS_CAP (1h)
+
+    state Closed {
+        [*] --> [*]: log "window closed"<br/>s_armed = false<br/>net_set_external_control(false)
+    }
+
+    Closed --> [*]: nächster Boot startet neu
+
+    note right of ARMED
+        Default-Verhalten:
+        - Mit Creds: 30 s Idle-Toleranz
+        - Ohne Creds: 120 s Idle-Toleranz
+        - Jeder Byte → Reset
+        Lib-windowMs = 1 h Hard-Cap
+    end note

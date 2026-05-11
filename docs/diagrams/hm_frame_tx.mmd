@@ -1,0 +1,36 @@
+%%{init: {'theme':'neutral'}}%%
+%% TX-Pfad mit TX-Master-Soft-Lock (v0.14)
+%% Single-Writer-Schutz für 8-bit msg_nr / ACK-Routing / AES-Challenge.
+%% Quelltext: bridge_tx_to_source() in bridge.c
+
+sequenceDiagram
+    actor Cli as Client<br/>(z.B. FHEM auf TCP/2330)
+    participant Sk as sink_hmu_legacy
+    participant Br as bridge<br/>+ tx_lock_state
+    participant USB as source_usb
+    participant Stick as HmIP-RFUSB
+
+    Cli->>Sk: APP_SEND<br/>(BidCoS-TX-Frame)
+    Sk->>Br: bridge_tx_to_source(<br/>&hmu->self, payload, len)
+
+    Br->>Br: take(s_br.mtx)
+    alt PINNED-Mode + idx != owner
+        Br-->>Sk: BRIDGE_ERR_TX_LOCKED<br/>(0xE0F1)
+        Sk-->>Cli: silent drop +<br/>tx_drop_lock++
+    else AUTO-Mode + idle > 5 s
+        Note over Br: tx_owner_idx ← my_idx<br/>"AUTO claim" Log
+        Br->>USB: hmu_frame_encode(<br/>cnt++, payload)
+        USB->>Stick: HMUARTLGW LLMAC_SEND
+        Stick-->>USB: LLMAC_ACK(cnt)
+        USB-->>Br: ack_route(cnt)
+        Br-->>Sk: APP_ACK
+        Sk-->>Cli: ACK
+    else Same owner, within 5 s
+        Br->>USB: hmu_frame_encode<br/>(cnt++, payload)
+        USB->>Stick: LLMAC_SEND
+        Stick-->>USB: LLMAC_ACK(cnt)
+        USB-->>Br: ack_route(cnt)
+        Br-->>Sk: APP_ACK
+        Sk-->>Cli: ACK
+    end
+    Br->>Br: tx_last_us = now<br/>release(s_br.mtx)

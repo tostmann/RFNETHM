@@ -1,0 +1,22 @@
+# RFNETHM v0.1 — sdkconfig defaults for ESP32-S3-WROOM-1 (16 MB QIO flash, 8 MB OctalPSRAM).
+# Anything not listed here uses IDF defaults.
+
+# ---- Flash ---------------------------------------------------------------
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
+CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
+
+# ---- Console -------------------------------------------------------------
+# Force console to UART0 (= CH343P bridge → ttyACM2 on the Pi5).
+# The ESP32-S3 USB-Serial-JTAG hardware shares pins (GPIO19/20) with the
+# native USB OTG PHY — and we need that PHY for USB Host mode.
+# So USB-JTAG console is unusable here.
+CONFIG_ESP_CONSOLE_UART_DEFAULT=y
+
+# ---- Logging -------------------------------------------------------------
+CONFIG_LOG_COLORS=y
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+
+# ---- USB Host ------------------------------------------------------------
+# Conservative control-transfer max — fits CP210x vendor requests with payload.
+CONFIG_USB_HOST_CONTROL_TRANSFER_MAX_SIZE=256
