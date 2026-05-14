@@ -87,8 +87,13 @@ Mehrfach-Schreiber abgesichert (erster Sender bekommt den Stick für
 
 ## Inbetriebnahme (Kurz)
 
-1. **Flashen.** PlatformIO-Profil `rfnethm`:
-   ```
+1. **Flashen.** Zwei Wege — entweder Source-Build via PlatformIO,
+   oder direkt eines der vorgebackenen Binaries (siehe Section
+   [Vorgebackene Binaries](#vorgebackene-binaries-flash-via-esptool)
+   unten) per `esptool`.
+
+   ```sh
+   # Source-Build:
    pio run -e rfnethm -t upload
    ```
 2. **WLAN provisionieren.** Zwei Wege:
@@ -104,6 +109,42 @@ Mehrfach-Schreiber abgesichert (erster Sender bekommt den Stick für
      (Schritt-Screenshot weiter unten unter
      [RaspberryMatic / OpenCCU einbinden](#raspberrymatic--openccu-einbinden)).
    - FHEM: `define hmusb HMUARTLGW rfnethm-XXXX.local:2330`.
+
+---
+
+## Vorgebackene Binaries (Flash via esptool)
+
+Wer nicht selbst bauen will, findet unter
+[`binaries/`](binaries/) zwei fertige Builds des jeweils aktuellen
+Public-Release:
+
+- **`rfnethm-vX.Y.Z-factory.bin`** — Komplett-Image (bootloader +
+  partition-table + ota_data + Applikation).  Erst-Flash für ein
+  jungfräuliches oder anders belegtes ESP32-S3.
+- **`rfnethm-vX.Y.Z-ota.bin`** — nur die Applikation (offset
+  `0x10000`).  Für OTA-Updates über die WebUI, oder als gezielter
+  Re-Flash auf bereits provisioniertes Gerät.
+
+```sh
+# 1) Erst-Flash via USB (ESP32-S3 im Download-Mode — BOOT-Button halten,
+#    RESET kurz, BOOT loslassen).  Port-Pfad gegebenenfalls anpassen.
+esptool.py --chip esp32s3 --port /dev/ttyACM0 --baud 921600 \
+    write_flash 0x0 binaries/rfnethm-v0.14.111-factory.bin
+
+# 2) OTA-Update via WebUI (empfohlen sobald das Gerät im Netz ist —
+#    kein Druck auf BOOT-Button nötig, keine USB-Verbindung):
+curl -X POST --data-binary @binaries/rfnethm-v0.14.111-ota.bin \
+    http://rfnethm-XXXX.local/api/ota
+
+# 3) Reiner Re-Flash der Anwendung über USB (ohne Partition-Tabelle
+#    anzufassen — z.B. wenn nur ein neuer Build aufgespielt werden soll):
+esptool.py --chip esp32s3 --port /dev/ttyACM0 --baud 921600 \
+    write_flash 0x10000 binaries/rfnethm-v0.14.111-ota.bin
+```
+
+`esptool.py` liegt bei PlatformIO bei (`~/.platformio/penv/bin/esptool.py`)
+oder kommt out-of-the-box aus `pip install esptool`.  Auf macOS / Windows
+ist der Port-Pfad entsprechend `/dev/cu.usbmodem*` bzw. `COMx`.
 
 ---
 
