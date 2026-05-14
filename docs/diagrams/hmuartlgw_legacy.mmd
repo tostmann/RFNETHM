@@ -1,0 +1,53 @@
+%%{init: {'theme':'neutral'}}%%
+%% HMUARTLGW Legacy-Emulation — TCP/2330 für FHEM/Homegear (Phase A-D)
+%% Stick-Firmware-Tag DualCoPro_App → Emu-Mode (translate)
+%% Stick-Firmware-Tag Co_CPU_App   → Bypass-Mode (passthrough)
+
+sequenceDiagram
+    actor Fhem as FHEM CUL_HM<br/>(oder Homegear)
+    participant Lg as sink_hmu_legacy<br/>(TCP:2330)
+    participant Br as bridge
+    participant USB as source_usb
+    participant Stick as HmIP-RFUSB
+
+    rect rgb(238, 246, 255)
+        Note over Fhem,Stick: Phase A — Init + Hello
+        Fhem->>Lg: TCP-Connect
+        Lg->>Lg: detect_host_type()<br/>(FHEM / Homegear / rfd)
+        Lg-->>Fhem: OS_GET_FW_VER → reply
+        Lg-->>Fhem: OS_GET_HMID → reply
+        Lg-->>Fhem: APP_GET_DEFAULT_HMID → reply
+        Lg-->>Fhem: HELLO-Push<br/>(spontaneous READY)
+    end
+
+    rect rgb(254, 252, 232)
+        Note over Fhem,Stick: Phase B — TX (APP_SEND → LLMAC_SEND)
+        Fhem->>Lg: APP_SEND [cnt_legacy, frame]
+        Lg->>Lg: pending_ack[cnt_legacy] = client
+        Lg->>Br: bridge_tx_to_source(<br/>&self, llmac_send_frame)
+        Br->>USB: hmu_frame_encode(cnt_internal++)
+        USB->>Stick: LLMAC_SEND [cnt_internal]
+        Stick-->>USB: LLMAC_ACK [cnt_internal]
+        USB-->>Br: ack_route(cnt_internal)
+        Br-->>Lg: ack-event
+        Lg->>Lg: cnt_internal → cnt_legacy (lookup)
+        Lg-->>Fhem: APP_ACK [cnt_legacy]
+        Note over Fhem: ~60 ms RTT verifiziert
+    end
+
+    rect rgb(232, 252, 240)
+        Note over Fhem,Stick: Phase C — RX (LLMAC_RECV → APP_RECV)
+        Stick->>USB: LLMAC_RECV [bidcos-frame]
+        USB->>Br: bridge_pump_rx()
+        Br->>Lg: push(payload)
+        Lg->>Lg: wrap as APP_RECV
+        Lg-->>Fhem: APP_RECV [frame]<br/>(broadcast an alle Clients)
+    end
+
+    rect rgb(254, 240, 240)
+        Note over Fhem,Stick: Phase D — AES-Storage (echte Auth = Phase E)
+        Fhem->>Lg: APP_SET_KEYS [keys]
+        Lg->>Lg: nvs_set "rfnh_aes"
+        Lg-->>Fhem: ACK_OK<br/>(blank, status=0x01)
+        Note over Lg: Phase D = nur NVS-Storage<br/>echte AES-Challenge = Phase E offen
+    end

@@ -1,0 +1,44 @@
+# RFNETHM v0.1 — sdkconfig defaults for ESP32-S3-WROOM-1 (16 MB QIO flash, 8 MB OctalPSRAM).
+# Anything not listed here uses IDF defaults.
+
+# ---- Flash ---------------------------------------------------------------
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
+CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
+
+# ---- Console -------------------------------------------------------------
+# Force console to UART0 (= CH343P bridge → ttyACM2 on the Pi5).
+# The ESP32-S3 USB-Serial-JTAG hardware shares pins (GPIO19/20) with the
+# native USB OTG PHY — and we need that PHY for USB Host mode.
+# So USB-JTAG console is unusable here.
+CONFIG_ESP_CONSOLE_UART_DEFAULT=y
+
+# ---- Logging -------------------------------------------------------------
+CONFIG_LOG_COLORS=y
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+
+# ---- USB Host ------------------------------------------------------------
+# Conservative control-transfer max — fits CP210x vendor requests with payload.
+CONFIG_USB_HOST_CONTROL_TRANSFER_MAX_SIZE=256
+
+# ---- System observability (Dauerlauf) -----------------------------------
+# Coredump-to-Flash: nach Panic landet ein ELF in der coredump-Partition
+# (siehe partitions_ota.csv).  Auslesen mit espcoredump.py oder
+# /api/coredump.
+CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH=y
+CONFIG_ESP_COREDUMP_DATA_FORMAT_ELF=y
+CONFIG_ESP_COREDUMP_CHECKSUM_CRC32=y
+CONFIG_ESP_COREDUMP_CHECK_BOOT=y
+CONFIG_ESP_COREDUMP_LOGS=y
+CONFIG_ESP_COREDUMP_MAX_TASKS_NUM=32
+CONFIG_ESP_COREDUMP_USE_STACK_SIZE=y
+CONFIG_ESP_COREDUMP_STACK_SIZE=1024
+
+# FreeRTOS trace-facility: aktiviert uxTaskGetSystemState() für die
+# Stack-HWM-Übersicht im 60-s-Statslog + /api/tasks.
+# VTASKLIST_INCLUDE_COREID legt das xCoreID-Feld in TaskStatus_t an —
+# brauchen wir für die per-Task-Core-Anzeige im Tasks-Endpoint.
+# Hängt an USE_STATS_FORMATTING_FUNCTIONS.
+CONFIG_FREERTOS_USE_TRACE_FACILITY=y
+CONFIG_FREERTOS_USE_STATS_FORMATTING_FUNCTIONS=y
+CONFIG_FREERTOS_VTASKLIST_INCLUDE_COREID=y

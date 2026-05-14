@@ -1,0 +1,33 @@
+%%{init: {'theme':'neutral'}}%%
+%% RX-Pfad: Sub-GHz-Frame → Stick → Bridge → alle Sinks (Multi-Client-Fanout)
+%% Quelltext: source_usb.c → bridge_pump_rx() → sink->push() in jedem Sink
+
+sequenceDiagram
+    participant Air as 868 MHz Funk
+    participant Stick as HmIP-RFUSB
+    participant USB as source_usb<br/>(USB-Host)
+    participant Br as bridge<br/>(fanout)
+    participant Hb as sink_hbrfeth<br/>(UDP/3008)
+    participant Tc as sink_tcp<br/>(TCP/2329)
+    participant Hm as sink_hmu_legacy<br/>(TCP/2330)
+    participant Lin as Linux-Konsumenten
+
+    Air->>Stick: BidCoS / HmIP RX-Frame
+    Stick->>USB: HMUARTLGW LLMAC_RECV<br/>(CRC16 0x8005/0xd77f)
+    USB->>USB: hmu_frame_decode()<br/>Header-Strip, CRC-Check
+    USB->>Br: bridge_pump_rx(payload, len)
+
+    par Fanout an alle Sinks
+        Br->>Hb: hb->push()<br/>HB-RF-ETH-Frame, Type 7 (FRAME)
+        Hb-->>Lin: UDP/3008 → hb_rf_eth.ko → /dev/raw-uart
+    and
+        Br->>Tc: tcp->push()<br/>raw payload
+        Tc-->>Lin: TCP/2329 broadcast an N Clients
+    and
+        Br->>Hm: hmu->push()<br/>APP_RECV-Wrapping
+        Hm-->>Lin: TCP/2330 broadcast an FHEM
+    and
+        Br->>Br: sink_debug<br/>(console hex-dump)
+    end
+
+    Note over Br,Lin: Alle Sinks sehen denselben Frame.<br/>Reine RX-Pfad ist lock-free.

@@ -1,0 +1,13 @@
+# Name,   Type, SubType, Offset,   Size,    Flags
+# 16 MB flash with two 3 MB OTA slots.  No factory partition — first
+# boot lives in ota_0.  esp_ota_get_next_update_partition() flips
+# between ota_0/ota_1 driven by ota_data.
+# coredump (64 KB) liegt hinter ota_1; ESP_COREDUMP_ENABLE_TO_FLASH=y
+# schreibt dort ein ELF nach Panic; auslesbar via espcoredump.py oder
+# /api/coredump.
+nvs,      data, nvs,     0x9000,   0x4000
+otadata,  data, ota,     0xd000,   0x2000
+phy_init, data, phy,     0xf000,   0x1000
+ota_0,    app,  ota_0,   0x10000,  0x300000
+ota_1,    app,  ota_1,   0x310000, 0x300000
+coredump, data, coredump,0x610000, 0x10000

@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+#
+# Wird vom idf-component-manager geparst. Der Pfad-Override funktioniert
+# auch hier: in firmware/CMakeLists.txt vor dem Projekt-Include
+#     set(EXTRA_COMPONENT_DIRS "/Public/CLAUDE/improv-wifi-busware/components")
+# Wenn dieser Pfad existiert, hat er Vorrang vor dem GitHub-Pin.
+
+dependencies:
+  improv_wifi_busware:
+    # busware-Variante der Improv-Serial-WiFi-Lib (Original jnthas, MIT).
+    # Auf festen Commit gepinnt fuer Reproduzierbarkeit; bumpen wenn die
+    # Lib-Seite ein neues Tag bekommt.
+    git: https://github.com/tostmann/improv-wifi-busware.git
+    version: f3a25298f806cf963a1fa3be6c0021d1a77158c0
+    path: components/improv_wifi_busware
+
+  espressif/mdns:
+    # mDNS / DNS-SD Responder.  Seit IDF 5.x lebt mDNS als managed
+    # component im esp-protocols-Repo, nicht mehr im Core-IDF.
+    # Genutzt fuer bmcond-Discovery: _hbrfeth._udp / _rawuart._tcp /
+    # _http._tcp werden bei STA-got-IP angemeldet (siehe mdns_glue.c).
+    version: "^1.2"

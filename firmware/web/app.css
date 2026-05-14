@@ -1,0 +1,780 @@
+/* RFNETHM dashboard — busware design language (CULFW32-derived). */
+
+:root {
+  --primary: #74b836;
+  --primary-dark: #5a8f29;
+  --bg: #f4f7f6;
+  --card-bg: #ffffff;
+  --text: #333;
+  --muted: #888;
+  --border: #e0e0e0;
+  --radius: 8px;
+  --danger: #ef4444;
+  --success: #10b981;
+  --warn: #f59e0b;
+  --indigo: #6366f1;
+
+  /* Light theme — Oberflächen + Pill-Paare.  Dark-Override gleich
+     unten kippt diese auf die dunkle Variante.  Alles, was vorher
+     hartkodiert war (navbar-white, #f0f0f0-pills etc.), referenziert
+     jetzt diese Vars statt direkter Farben. */
+  --surface:            #ffffff;       /* Navbar + Footer + Input-Bg */
+  --surface-elev:       #f0f0f0;       /* Neutraler Pill-Hintergrund */
+  --rf-card-grad-a:     #ffffff;
+  --rf-card-grad-b:     #fafafa;
+  --rf-card-border-off: #cfd5d8;
+
+  --pill-info-bg:       #eff6ff;       /* Uptime */
+  --pill-info-fg:       #1e40af;
+  --pill-neutral-bg:    #f3f4f6;       /* Heap, Stack */
+  --pill-neutral-fg:    #374151;
+  --pill-ok-bg:         #e6f4d4;       /* Reset POWERON */
+  --pill-ok-fg:         #3a6818;
+  --pill-warn-bg:       #fff3cd;       /* Reset BROWNOUT */
+  --pill-warn-fg:       #6b5210;
+  --pill-warn-ap-bg:    #fde8b5;       /* Net AP */
+  --pill-warn-ap-fg:    #7a4a00;
+  --pill-crash-bg:      #fde2e2;       /* Reset PANIC + Heap/Stack Low */
+  --pill-crash-fg:      #842020;
+
+  --status-unknown-bg:  #cccccc;
+  --status-unknown-fg:  #555555;
+  --rf-state-idle-bg:   #ddd;
+  --rf-state-idle-fg:   #555;
+
+  --btn-secondary-bg:        #777;
+  --btn-secondary-hover-bg:  #555;
+  --btn-disabled-bg:         #aaa;
+  --btn-danger-hover-bg:     #c52f2f;
+  --tab-hover-bg:            #f0f6e8;
+
+  --code-bg:            #f0f0f0;       /* config-hint code-Inline */
+  --modal-overlay-bg:   rgba(0,0,0,0.45);
+
+  --console-bg:         #1e1e2a;       /* Debug-Console */
+  --console-fg:         #e6e6e9;
+  --console-border:     #2a2a40;
+
+  --brand-net-color:    #2d3a4d;       /* Net-Span im Title */
+
+  --shadow-card:        0 4px 6px rgba(0,0,0,0.05);
+  --shadow-navbar:      0 2px 4px rgba(0,0,0,0.08);
+  --shadow-modal:       0 10px 30px rgba(0,0,0,0.25);
+  --shadow-rf-active:   0 4px 14px rgba(116,184,54,0.18);
+  --shadow-bridge-active: 0 2px 8px rgba(245,158,11,0.25);
+}
+
+/* Dark theme — applied either explicitly via [data-theme="dark"]
+   (User-Toggle, persistiert in localStorage) oder implicit über
+   prefers-color-scheme bei nicht-überschriebenem Theme.  Die Inline-
+   Script-Snippet im <head> setzt data-theme schon vor dem ersten
+   Paint, daher ohne FOUC. */
+[data-theme="dark"] {
+  --primary:            #8fce4a;       /* etwas heller damit Akzent auf dunklem Bg trägt */
+  --primary-dark:       #6fa336;
+
+  --bg:                 #0d1117;
+  --card-bg:            #161b22;
+  --text:               #e6edf3;
+  --muted:              #8b949e;
+  --border:             #30363d;
+
+  --danger:             #f47272;
+  --success:            #2ea043;
+  --warn:               #d9a23c;
+  --indigo:             #818cf8;
+
+  --surface:            #161b22;
+  --surface-elev:       #242a33;
+  --rf-card-grad-a:     #1a2029;
+  --rf-card-grad-b:     #161b22;
+  --rf-card-border-off: #3a414b;
+
+  --pill-info-bg:       #1e3a5f;
+  --pill-info-fg:       #93c5fd;
+  --pill-neutral-bg:    #242a33;
+  --pill-neutral-fg:    #c5cdd6;
+  --pill-ok-bg:         #1f3a18;
+  --pill-ok-fg:         #b9dd97;
+  --pill-warn-bg:       #4a3d14;
+  --pill-warn-fg:       #f1d68a;
+  --pill-warn-ap-bg:    #5a3e0e;
+  --pill-warn-ap-fg:    #ffd590;
+  --pill-crash-bg:      #4a1f1f;
+  --pill-crash-fg:      #ff9b9b;
+
+  --status-unknown-bg:  #3a3f47;
+  --status-unknown-fg:  #b0b6bf;
+  --rf-state-idle-bg:   #3a3f47;
+  --rf-state-idle-fg:   #b0b6bf;
+
+  --btn-secondary-bg:        #444a55;
+  --btn-secondary-hover-bg:  #2e333b;
+  --btn-disabled-bg:         #4a4f57;
+  --btn-danger-hover-bg:     #a92424;
+  --tab-hover-bg:            #1f2a14;
+
+  --code-bg:            #242a33;
+  --modal-overlay-bg:   rgba(0,0,0,0.70);
+
+  --console-bg:         #0a0d12;
+  --console-fg:         #d8dde4;
+  --console-border:     #1f242c;
+
+  --brand-net-color:    #b3becf;
+
+  --shadow-card:        0 4px 6px rgba(0,0,0,0.35);
+  --shadow-navbar:      0 2px 6px rgba(0,0,0,0.4);
+  --shadow-modal:       0 10px 30px rgba(0,0,0,0.55);
+  --shadow-rf-active:   0 4px 14px rgba(143,206,74,0.25);
+  --shadow-bridge-active: 0 2px 10px rgba(217,162,60,0.35);
+  color-scheme: dark;     /* Native-UI-Elements (scrollbars, form inputs) */
+}
+:root:not([data-theme]) { color-scheme: light; }
+
+* { box-sizing: border-box; }
+
+body {
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+
+/* ============ Navbar ============ */
+.navbar {
+  background: var(--surface);
+  padding: 0.6rem 2rem;
+  display: flex;
+  align-items: center;
+  box-shadow: var(--shadow-navbar);
+  border-bottom: 3px solid var(--primary);
+}
+.navbar-brand {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+/* busmatic.png ist 2353×350 (wide-aspect) — height: 28px gibt ~188 px Breite,
+   passt in den Brand-Slot ohne den Title zu drücken.  Zwei Varianten:
+   busmatic.png (dunkler Schriftzug, light theme) und busmatic_white.png
+   (heller Schriftzug, dark theme); CSS-Swap via data-theme. */
+.navbar-brand img.brand-logo { height: 28px; }
+:root:not([data-theme="dark"]) .brand-logo-dark  { display: none; }
+[data-theme="dark"]            .brand-logo-light { display: none; }
+/* Brand-Title gemischt — passt zur SSID "RFNetHM <last4mac>".
+   Drei Spans: RF (primary-grün), Net (dark-text mit Schräglage),
+   HM (primary-dark).  Kein "ALL CAPS" mehr. */
+.brand-title {
+  font-size: 1.45rem;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  display: inline-flex;
+  align-items: baseline;
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+}
+.brand-title .brand-rf  { color: var(--primary); font-weight: 800; }
+.brand-title .brand-net {
+  color: var(--brand-net-color);
+  font-weight: 500;
+  font-style: italic;
+  font-size: 0.92em;
+  margin: 0 0.04em;
+}
+.brand-title .brand-hm  { color: var(--primary-dark); font-weight: 800; }
+.brand-version {
+  font-family: 'Consolas','Menlo',monospace;
+  font-size: 0.78rem;
+  color: var(--muted);
+  background: var(--surface-elev);
+  padding: 0.1rem 0.5rem;
+  border-radius: 4px;
+  user-select: text;
+}
+.brand-meta {
+  font-family: 'Consolas','Menlo',monospace;
+  font-size: 0.75rem;
+  padding: 0.1rem 0.5rem;
+  border-radius: 4px;
+  user-select: text;
+  white-space: nowrap;
+}
+.brand-reset-ok    { background: var(--pill-ok-bg);    color: var(--pill-ok-fg); }
+.brand-reset-warn  { background: var(--pill-warn-bg);  color: var(--pill-warn-fg); }
+.brand-reset-crash { background: var(--pill-crash-bg); color: var(--pill-crash-fg); font-weight: 600; }
+#brand-uptime      { background: var(--pill-info-bg);    color: var(--pill-info-fg); }
+#brand-heap        { background: var(--pill-neutral-bg); color: var(--pill-neutral-fg); }
+#brand-heap.brand-heap-low   { background: var(--pill-crash-bg); color: var(--pill-crash-fg); font-weight: 600; }
+#brand-stack       { background: var(--pill-neutral-bg); color: var(--pill-neutral-fg); }
+#brand-stack.brand-stack-low { background: var(--pill-crash-bg); color: var(--pill-crash-fg); font-weight: 600; }
+#brand-coredump    { background: var(--pill-crash-bg);   color: var(--pill-crash-fg); font-weight: 700; text-decoration: none; letter-spacing: 0.06em; }
+#brand-coredump.brand-coredump-hidden { display: none; }
+
+/* Theme-Toggle (Sun/Moon-Button in der Navbar) ----------------------- */
+.theme-toggle {
+  background: var(--surface-elev);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0.25rem 0.55rem;
+  font-size: 0.85rem;
+  line-height: 1;
+  cursor: pointer;
+  font-family: inherit;
+  margin-left: 0.4rem;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.theme-toggle:hover {
+  background: var(--primary);
+  color: white;
+  border-color: var(--primary-dark);
+}
+.theme-toggle .ic { display: inline-block; width: 1em; text-align: center; }
+[data-theme="dark"] .theme-toggle .ic-sun  { display: inline; }
+[data-theme="dark"] .theme-toggle .ic-moon { display: none; }
+:root:not([data-theme="dark"]) .theme-toggle .ic-sun  { display: none; }
+:root:not([data-theme="dark"]) .theme-toggle .ic-moon { display: inline; }
+
+/* ============ Status badge ============ */
+.status-badge {
+  display: inline-block;
+  padding: 0.2rem 0.7rem;
+  border-radius: 20px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  margin-left: 1rem;
+}
+.status-online   { background: var(--success); color: white; }
+.status-offline  { background: var(--danger);  color: white; }
+.status-unknown  { background: var(--status-unknown-bg); color: var(--status-unknown-fg); }
+
+/* ============ Container / grids ============ */
+.container {
+  max-width: 1100px;
+  margin: 1.5rem auto;
+  padding: 0 1rem;
+  width: 95%;
+  flex-grow: 1;
+}
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 1.25rem;
+  margin-bottom: 1.5rem;
+}
+.grid-rf { grid-template-columns: 1fr; margin-bottom: 1rem; }
+.grid-rf-dual { grid-template-columns: repeat(auto-fit, minmax(360px, 1fr)); }
+
+/* ============ Cards ============ */
+.card {
+  background: var(--card-bg);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-card);
+  padding: 1.2rem;
+  border: 1px solid var(--border);
+}
+.card-header {
+  border-bottom: 2px solid var(--bg);
+  margin-bottom: 0.8rem;
+  padding-bottom: 0.4rem;
+  font-weight: bold;
+  color: var(--primary-dark);
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+}
+.card-body { line-height: 1.6; }
+
+/* ============ HmIP-Stick Top-Card ============ */
+.card-rf {
+  border-left: 4px solid var(--rf-card-border-off);
+  background: linear-gradient(135deg, var(--rf-card-grad-a), var(--rf-card-grad-b));
+  opacity: 0.78;
+  transition: border-left-color 0.2s, opacity 0.2s, box-shadow 0.2s;
+}
+.card-rf.rf-active {
+  border-left: 4px solid var(--primary);
+  opacity: 1.0;
+  box-shadow: var(--shadow-rf-active);
+}
+.rf-active-pill {
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  padding: 0.1rem 0.55rem;
+  border-radius: 10px;
+  background: transparent;
+  color: transparent;
+}
+.rf-active-pill.on {
+  background: var(--primary);
+  color: white;
+}
+.rf-state-pill {
+  margin-left: auto;
+  font-size: 0.8rem;
+  font-weight: 500;
+  padding: 0.15rem 0.7rem;
+  border-radius: 12px;
+  background: var(--rf-state-idle-bg);
+  color: var(--rf-state-idle-fg);
+}
+.rf-state-pill.ready { background: var(--success); color: white; }
+.rf-state-pill.boot  { background: var(--warn);    color: white; }
+.rf-state-pill.idle  { background: var(--rf-state-idle-bg); color: var(--rf-state-idle-fg); }
+.rf-state-pill.err   { background: var(--danger);  color: white; }
+.card-rf-body { padding-top: 0.3rem; }
+.rf-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 0.6rem 1.2rem;
+  font-size: 0.95rem;
+}
+.rf-grid > div { display: flex; flex-direction: column; }
+.rf-grid b {
+  font-weight: 500;
+  color: var(--muted);
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.rf-grid span {
+  font-family: 'Consolas','Menlo',monospace;
+  font-size: 1.05rem;
+  color: var(--text);
+}
+
+/* ============ Stats Tiles ============ */
+.stats-grid { grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
+.stats-card .stat-big {
+  font-size: 2.2rem;
+  font-weight: 600;
+  color: var(--primary-dark);
+  font-family: 'Consolas','Menlo',monospace;
+  line-height: 1.1;
+  word-break: break-all;
+  overflow-wrap: anywhere;
+}
+/* IPv4 / Hostname-Strings sind länger als reine Zahlen — eigene Klasse,
+   die sich an die Tile-Breite anpasst (16px → ~12 char passen sicher in
+   220px) statt an dem 2.2rem fix zu kleben.  Mobil (<720px) zusätzlich
+   schrumpfen. */
+.stats-card .stat-big-ip {
+  font-size: 1.45rem;
+  font-weight: 600;
+  color: var(--primary-dark);
+  font-family: 'Consolas','Menlo',monospace;
+  line-height: 1.15;
+  word-break: break-all;
+  overflow-wrap: anywhere;
+  letter-spacing: -0.01em;
+}
+.stats-card .stat-sub {
+  display: block;
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-family: 'Consolas','Menlo',monospace;
+  margin-bottom: 0.5rem;
+}
+.stats-card .stat-row {
+  display: flex;
+  justify-content: space-between;
+  font-family: 'Consolas','Menlo',monospace;
+  font-size: 0.9rem;
+  margin: 0.18rem 0;
+}
+.stats-card .stat-row b {
+  color: var(--primary-dark);
+  font-weight: 600;
+}
+.stats-card.stats-net    { border-left: 4px solid var(--primary); }
+.stats-card.stats-hbrf   { border-left: 4px solid #0ea5e9; }
+.stats-card.stats-tcp    { border-left: 4px solid #8b5cf6; }
+.stats-card.stats-bridge { border-left: 4px solid var(--warn); }
+.stats-card.stats-hmu    { border-left: 4px solid #ec4899; }
+.stats-card.stats-sys    { border-left: 4px solid var(--indigo); }
+
+/* ============ Config Card ============ */
+.config-card { margin-bottom: 1.5rem; }
+.config-h {
+  margin: 1rem 0 0.5rem;
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  font-weight: 600;
+}
+.config-h:first-child { margin-top: 0; }
+.config-form {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-bottom: 0.4rem;
+}
+.config-form input[type="text"],
+.config-form input[type="password"],
+.config-form input:not([type]),
+.config-form input[type="file"] {
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  padding: 0.4rem 0.6rem;
+  border-radius: var(--radius);
+  font-family: inherit;
+  font-size: 0.95rem;
+  min-width: 160px;
+}
+.config-form input:focus { outline: 2px solid var(--primary); outline-offset: -1px; }
+.config-msg {
+  font-size: 0.85rem;
+  color: var(--muted);
+  margin-left: 0.5rem;
+}
+.config-msg.ok    { color: var(--success); font-weight: 600; }
+.config-msg.error { color: var(--danger);  font-weight: 600; }
+.config-hint {
+  display: block;
+  color: var(--muted);
+  font-size: 0.75rem;
+  line-height: 1.4;
+  margin-top: 0.2rem;
+  margin-bottom: 0.6rem;
+}
+.config-hint code {
+  background: var(--code-bg);
+  padding: 0.05rem 0.3rem;
+  border-radius: 3px;
+  font-family: 'Consolas','Menlo',monospace;
+  font-size: 0.75rem;
+}
+
+/* ============ Buttons ============ */
+button.btn-primary, button.btn-secondary {
+  background: var(--primary);
+  color: white;
+  border: 0;
+  border-radius: var(--radius);
+  padding: 0.45rem 1rem;
+  cursor: pointer;
+  font-size: 0.95rem;
+  font-family: inherit;
+  transition: background 0.1s;
+}
+button.btn-primary:hover { background: var(--primary-dark); }
+button.btn-secondary { background: var(--btn-secondary-bg); }
+button.btn-secondary:hover { background: var(--btn-secondary-hover-bg); }
+button:disabled {
+  background: var(--btn-disabled-bg) !important;
+  cursor: not-allowed;
+}
+
+/* ============ Tabs ============ */
+.tabs {
+  display: flex;
+  gap: 0.4rem;
+  margin-left: auto;
+}
+.tab {
+  background: transparent;
+  border: 1px solid transparent;
+  border-bottom: 0;
+  border-radius: 6px 6px 0 0;
+  padding: 0.45rem 0.95rem;
+  font-family: inherit;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--muted);
+  cursor: pointer;
+  position: relative;
+  top: 1px;
+  transition: background 0.1s, color 0.1s;
+}
+.tab:hover     { color: var(--primary-dark); background: var(--tab-hover-bg); }
+.tab.active    {
+  color: var(--primary-dark);
+  background: var(--bg);
+  border-color: var(--border);
+  border-bottom: 2px solid var(--bg);
+}
+.tab-pane          { display: none; }
+.tab-pane.active   { display: block; }
+
+/* ============ Net-Tile inline action ============ */
+.net-actions { margin-top: 0.6rem; display: flex; gap: 0.4rem; flex-wrap: wrap; }
+.btn-link {
+  background: transparent;
+  color: var(--primary-dark);
+  border: 1px solid var(--primary);
+  border-radius: var(--radius);
+  padding: 0.3rem 0.7rem;
+  cursor: pointer;
+  font-size: 0.85rem;
+  font-family: inherit;
+  transition: background 0.1s, color 0.1s;
+}
+.btn-link:hover { background: var(--primary); color: white; }
+.net-mode-pill {
+  display: inline-block;
+  padding: 0.1rem 0.55rem;
+  border-radius: 12px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  margin-left: 0.4rem;
+  vertical-align: middle;
+}
+.net-mode-pill.sta { background: var(--pill-ok-bg);      color: var(--pill-ok-fg); }
+.net-mode-pill.ap  { background: var(--pill-warn-ap-bg); color: var(--pill-warn-ap-fg); }
+
+/* ============ Modal (WiFi-Config) ============ */
+.modal-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: var(--modal-overlay-bg);
+  z-index: 1000;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 4rem 1rem 1rem;
+}
+.modal-overlay.open { display: flex; }
+.modal-card {
+  background: var(--card-bg);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-modal);
+  border: 1px solid var(--border);
+  border-top: 4px solid var(--primary);
+  padding: 1.4rem 1.4rem 1.2rem;
+  width: 100%;
+  max-width: 460px;
+  max-height: calc(100vh - 6rem);
+  overflow-y: auto;
+  position: relative;
+}
+.modal-title {
+  margin: 0 0 0.8rem;
+  color: var(--primary-dark);
+  font-size: 1.15rem;
+  font-weight: 600;
+}
+.modal-close {
+  position: absolute;
+  top: 0.7rem; right: 0.9rem;
+  font-size: 1.4rem;
+  line-height: 1;
+  color: var(--muted);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  padding: 0;
+}
+.modal-close:hover { color: var(--text); }
+.modal-row { display: flex; flex-direction: column; gap: 0.3rem; margin-bottom: 0.7rem; }
+.modal-row label {
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  font-weight: 600;
+}
+.modal-row input,
+.modal-row select {
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  padding: 0.45rem 0.6rem;
+  border-radius: var(--radius);
+  font-family: inherit;
+  font-size: 0.95rem;
+}
+.modal-row input:focus,
+.modal-row select:focus { outline: 2px solid var(--primary); outline-offset: -1px; }
+.modal-row select { font-family: 'Consolas','Menlo',monospace; font-size: 0.9rem; }
+.modal-actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-top: 0.7rem;
+}
+.modal-actions .btn-primary { flex: 1 1 auto; }
+.modal-divider {
+  border: 0;
+  border-top: 1px dashed var(--border);
+  margin: 1rem 0 0.8rem;
+}
+.modal-msg {
+  font-size: 0.85rem;
+  margin-top: 0.4rem;
+  min-height: 1.1em;
+  color: var(--muted);
+}
+.modal-msg.ok    { color: var(--success); font-weight: 600; }
+.modal-msg.error { color: var(--danger);  font-weight: 600; }
+.btn-danger {
+  background: var(--danger);
+  color: white;
+  border: 0;
+  border-radius: var(--radius);
+  padding: 0.45rem 1rem;
+  cursor: pointer;
+  font-size: 0.9rem;
+  font-family: inherit;
+  transition: background 0.1s;
+}
+.btn-danger:hover { background: var(--btn-danger-hover-bg); }
+
+/* ============ Debug-Console ============ */
+.console-card { padding: 1rem 1.2rem 1.2rem; }
+.console-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.5rem;
+  font-size: 0.85rem;
+}
+.console-opt { color: var(--muted); user-select: none; cursor: pointer; }
+.console-opt input { vertical-align: middle; margin-right: 0.25rem; }
+.console-pane {
+  background: var(--console-bg);
+  color: var(--console-fg);
+  border-radius: 6px;
+  padding: 0.7rem 0.9rem;
+  margin: 0;
+  font-family: 'Consolas','Menlo','SFMono-Regular',monospace;
+  font-size: 0.8rem;
+  line-height: 1.35;
+  height: 60vh;
+  min-height: 320px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  border: 1px solid var(--console-border);
+}
+.console-pane .ll-i { color: #9ad08e; }
+.console-pane .ll-w { color: #e7c970; }
+.console-pane .ll-e { color: #ef6b6b; font-weight: 600; }
+.console-pane .ll-d { color: #7ec3ee; }
+.console-pane .ll-ts {
+  color: #6a6a7a;
+  margin-right: 0.5rem;
+}
+.rf-state-pill.live  { background: var(--success); color: white; }
+.rf-state-pill.paused{ background: var(--warn);    color: white; }
+.rf-state-pill.dead  { background: var(--danger);  color: white; }
+
+/* ============ Footer ============ */
+.footer {
+  text-align: center;
+  padding: 0.8rem;
+  color: var(--muted);
+  font-size: 0.85rem;
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+}
+.footer a { color: var(--primary-dark); text-decoration: none; }
+.footer a:hover { text-decoration: underline; }
+
+/* ============ TX-Master Radios ============ */
+.tx-master-radio {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.7rem;
+  font-weight: 500;
+  color: var(--muted);
+  cursor: pointer;
+  user-select: none;
+  padding: 2px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  transition: background .15s, color .15s, border-color .15s;
+}
+.tx-master-radio:hover {
+  background: var(--surface);
+  color: var(--text);
+}
+.tx-master-radio input[type=radio] {
+  margin: 0;
+  accent-color: var(--primary);
+}
+/* Pinned-state — die Card mit gechecktem Radio bekommt einen Glow.
+   Setzen wir per JS via .tx-pinned auf der card. */
+.stats-card.tx-pinned {
+  box-shadow: 0 0 0 2px var(--primary), var(--shadow-rf-active);
+}
+.stats-card.tx-pinned .tx-master-radio {
+  background: var(--primary);
+  color: white;
+  border-color: var(--primary-dark);
+  font-weight: 700;
+}
+/* AUTO-Bridge-Variante: andere Akzentfarbe, damit das nicht wie ein
+   "TX-Master Bridge" aussieht (Bridge schickt selbst nichts). */
+.tx-master-radio.tx-master-auto input[type=radio] {
+  accent-color: var(--warn);
+}
+.stats-card.stats-bridge.tx-pinned {
+  box-shadow: 0 0 0 2px var(--warn), var(--shadow-bridge-active);
+}
+.stats-card.stats-bridge.tx-pinned .tx-master-radio {
+  background: var(--warn);
+  color: white;
+  border-color: var(--primary-dark);
+}
+/* Cards ohne aktuelles TX-Recht (PIN-Mode, nicht Owner) leicht desaturieren.
+   Nicht zu hart — Stats müssen lesbar bleiben.  AUTO-Mode greyed nicht. */
+.stats-card.tx-locked-out {
+  opacity: 0.55;
+  filter: grayscale(0.45);
+}
+.stats-card.tx-locked-out .tx-master-radio {
+  opacity: 0.85;
+}
+.stats-card.tx-locked-out::after {
+  content: "TX gesperrt";
+  position: absolute;
+  top: 0.5rem;
+  right: 0.7rem;
+  font-size: 0.65rem;
+  font-weight: 700;
+  color: var(--danger);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  pointer-events: none;
+}
+.stats-card { position: relative; }
+
+/* ============ mDNS-Link in Net-Tile ============ */
+.mdns-link {
+  color: var(--primary-dark);
+  text-decoration: none;
+  font-family: 'Consolas', 'Courier New', monospace;
+  font-size: 0.95em;
+}
+.mdns-link:hover { text-decoration: underline; }
+.mdns-link.mdns-disabled {
+  color: var(--muted);
+  cursor: default;
+  pointer-events: none;
+}
+
+/* ============ Mobile ============ */
+@media (max-width: 720px) {
+  .navbar { flex-direction: column; align-items: flex-start; padding: 0.5rem 1rem; }
+  .navbar-brand .brand-title { font-size: 1.15rem; }
+  .stats-card .stat-big { font-size: 1.7rem; }
+  .stats-card .stat-big-ip { font-size: 1.2rem; }
+  .config-form { flex-direction: column; align-items: stretch; }
+  .config-form input { width: 100%; }
+  .modal-overlay { padding: 1.5rem 0.5rem 0.5rem; }
+  .modal-card { padding: 1.1rem 1rem 1rem; }
+  .tabs { margin-left: 0; margin-top: 0.5rem; flex-wrap: wrap; }
+  .console-pane { height: 50vh; font-size: 0.75rem; }
+}

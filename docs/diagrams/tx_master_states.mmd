@@ -1,0 +1,34 @@
+%%{init: {'theme':'neutral'}}%%
+%% TX-Master-Soft-Lock State Machine — bridge.c (v0.14)
+%% Schützt Single-Writer-Resourcen (msg_nr, ACK-Routing, AES-Challenge).
+
+stateDiagram-v2
+    [*] --> AUTO_no_owner
+
+    state "AUTO no owner" as AUTO_no_owner
+    state "AUTO owned by SinkX" as AUTO_owned
+    state "PINNED to SinkX" as PINNED
+
+    AUTO_no_owner --> AUTO_owned: SinkX TX<br/>(claim, log "AUTO claim")
+    AUTO_owned --> AUTO_owned: SinkX TX<br/>(refresh tx_last_us)
+    AUTO_owned --> AUTO_owned: SinkY TX while idle<5s<br/>REJECTED → BRIDGE_ERR_TX_LOCKED
+    AUTO_owned --> AUTO_no_owner: 5 s idle<br/>(no TX from any sink)
+    AUTO_owned --> AUTO_owned: SinkY TX after idle>5s<br/>(claim flips, "AUTO claim")
+
+    AUTO_no_owner --> PINNED: POST /api/bridge/master<br/>{sink: hbrfeth|rawuart|hmu}
+    AUTO_owned --> PINNED: POST /api/bridge/master
+    PINNED --> PINNED: pinned-Sink TX (allowed)
+    PINNED --> PINNED: any other Sink TX<br/>REJECTED → BRIDGE_ERR_TX_LOCKED
+    PINNED --> AUTO_no_owner: POST /api/bridge/master<br/>{sink: auto}
+
+    note right of AUTO_owned
+        Owner-Kachel: grüner Glow
+        andere TX-Kacheln: voll farbig
+        (kein Visual-Lockout)
+    end note
+
+    note right of PINNED
+        Owner-Kachel: grüner Glow
+        andere TX-Kacheln: ausgegraut
+        + "TX gesperrt"-Badge
+    end note

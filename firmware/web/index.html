@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RFNETHM</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%2374b836'/%3E%3Ctext x='4' y='42' font-family='Verdana' font-size='22' font-weight='bold' fill='white'%3ERF%3C/text%3E%3C/svg%3E">
+<link rel="stylesheet" href="/app.css?v=1">
+<script>
+  // Theme bootstrap — läuft synchron im <head> vor dem ersten Paint
+  // (FOUC-frei).  Priorität: explizite User-Wahl in localStorage,
+  // dann OS-Präferenz, dann Light.  app.js übernimmt den Toggle und
+  // schreibt zurück nach localStorage.
+  (function(){
+    try {
+      var pref = localStorage.getItem('rfnethm-theme');
+      if (pref !== 'light' && pref !== 'dark') {
+        pref = (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches)
+          ? 'dark' : 'light';
+      }
+      document.documentElement.setAttribute('data-theme', pref);
+    } catch (e) { /* localStorage gesperrt → Default-Light, kein Toggle persist */ }
+  })();
+</script>
+</head>
+<body>
+
+<nav class="navbar">
+  <div class="navbar-brand">
+    <img src="/assets/busmatic.png"       alt="busmatic" class="brand-logo brand-logo-light">
+    <img src="/assets/busmatic_white.png" alt="busmatic" class="brand-logo brand-logo-dark">
+    <span class="brand-title"><span class="brand-rf">RF</span><span class="brand-net">Net</span><span class="brand-hm">HM</span></span>
+    <span id="brand-version" class="brand-version" title="Firmware-Version / Build">…</span>
+    <span id="brand-uptime" class="brand-meta" title="Session-Uptime seit letztem Boot">…</span>
+    <span id="brand-reset" class="brand-meta brand-reset-ok" title="Letzter Reset-Reason">…</span>
+    <span id="brand-heap"  class="brand-meta" title="Heap free / min — Dauerlauf-Indikator">…</span>
+    <span id="brand-stack" class="brand-meta" title="Engste Stack-HWM (Task : Words) — &lt;256 = WARN">…</span>
+    <a id="brand-coredump" class="brand-meta brand-coredump-hidden" href="/api/coredump" title="Coredump im Flash — Download als ELF">CORE</a>
+    <button id="theme-toggle" class="theme-toggle" type="button" title="Light/Dark umschalten (gespeichert pro Browser)" aria-label="Theme umschalten"><span class="ic ic-moon">🌙</span><span class="ic ic-sun">☀︎</span></button>
+    <span id="badge-state" class="status-badge status-unknown">…</span>
+  </div>
+  <div class="tabs">
+    <button class="tab active" data-tab="stats" type="button">Stats</button>
+    <button class="tab"        data-tab="console" type="button">Debug-Console</button>
+  </div>
+</nav>
+
+<main id="tab-stats" class="container tab-pane active">
+
+  <!-- ============== RF-Sources (USB + UART, parallel) ============== -->
+  <div class="grid grid-rf grid-rf-dual">
+    <div class="card card-rf" id="card-usb">
+      <div class="card-header">HmIP-RFUSB Stick
+        <span class="rf-active-pill" id="usb-active-pill">…</span>
+        <span class="rf-state-pill"  id="usb-state-pill">…</span>
+      </div>
+      <div class="card-body card-rf-body">
+        <div class="rf-grid">
+          <div><b>Status</b><span id="usb-conn">…</span></div>
+          <div><b>Boot</b><span id="usb-boot">…</span></div>
+          <div><b>App-Tag</b><span id="usb-tag">…</span></div>
+          <div><b>Frames OK</b><span id="usb-frames">…</span></div>
+          <div><b>CRC-Errors</b><span id="usb-crc">…</span></div>
+          <div><b>Truncated</b><span id="usb-trunc">…</span></div>
+          <div><b>Skipped</b><span id="usb-skip">…</span></div>
+        </div>
+      </div>
+    </div>
+    <div class="card card-rf" id="card-uart">
+      <div class="card-header">HM-MOD UART-Modul
+        <span class="rf-active-pill" id="uart-active-pill">…</span>
+        <span class="rf-state-pill"  id="uart-state-pill">…</span>
+      </div>
+      <div class="card-body card-rf-body">
+        <div class="rf-grid">
+          <div><b>Status</b><span id="uart-conn">…</span></div>
+          <div><b>Boot</b><span id="uart-boot">…</span></div>
+          <div><b>App-Tag</b><span id="uart-tag">…</span></div>
+          <div><b>Frames OK</b><span id="uart-frames">…</span></div>
+          <div><b>CRC-Errors</b><span id="uart-crc">…</span></div>
+          <div><b>Truncated</b><span id="uart-trunc">…</span></div>
+          <div><b>Skipped</b><span id="uart-skip">…</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============== Stats-Kacheln ============== -->
+  <div class="grid stats-grid">
+
+    <div class="card stats-card stats-net">
+      <div class="card-header">Netzwerk
+        <span id="st-net-mode" class="net-mode-pill sta" title="Aktueller WiFi-Modus">STA</span>
+      </div>
+      <div class="card-body">
+        <div class="stat-big-ip" id="st-ip">…</div>
+        <small class="stat-sub" id="st-ssid">…</small>
+        <div class="stat-row"><span>Status</span><b id="st-net-state">…</b></div>
+        <div class="stat-row"><span>Hostname</span><b id="st-host">…</b></div>
+        <div class="stat-row"><span>mDNS</span><b><a id="st-mdns-link" class="mdns-link" href="#">…</a></b></div>
+        <div class="net-actions">
+          <button class="btn-link" id="btn-wifi-cfg" type="button">WiFi konfigurieren…</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="card stats-card stats-hbrf">
+      <div class="card-header">HB-RF-ETH UDP
+        <label class="tx-master-radio" title="diesen Sink als TX-Master pinnen">
+          <input type="radio" name="tx-master" value="hbrfeth"> Lock
+        </label>
+      </div>
+      <div class="card-body">
+        <div class="stat-big"><span id="st-hb-clients">…</span> / 4</div>
+        <small class="stat-sub">Clients · Port <span id="st-hb-port">3008</span></small>
+        <div class="stat-row"><span>Connects</span><b id="st-hb-conn">…</b></div>
+        <div class="stat-row"><span>Disconnects</span><b id="st-hb-disc">…</b></div>
+        <div class="stat-row"><span>RX Frames</span><b id="st-hb-rx">…</b></div>
+        <div class="stat-row"><span>TX Frames</span><b id="st-hb-tx">…</b></div>
+        <div class="stat-row"><span>KA Timeouts</span><b id="st-hb-ka">…</b></div>
+        <div class="stat-row"><span>Bad CRC</span><b id="st-hb-crc">…</b></div>
+      </div>
+    </div>
+
+    <div class="card stats-card stats-tcp">
+      <div class="card-header">Raw-TCP
+        <label class="tx-master-radio" title="diesen Sink als TX-Master pinnen">
+          <input type="radio" name="tx-master" value="rawuart"> Lock
+        </label>
+      </div>
+      <div class="card-body">
+        <div class="stat-big"><span id="st-tcp-clients">…</span> / 4</div>
+        <small class="stat-sub">Clients · Port <span id="st-tcp-port">2329</span></small>
+        <div class="stat-row"><span>Total Accepts</span><b id="st-tcp-acc">…</b></div>
+        <div class="stat-row"><span>RX Bytes</span><b id="st-tcp-rx">…</b></div>
+        <div class="stat-row"><span>TX Bytes</span><b id="st-tcp-tx">…</b></div>
+      </div>
+    </div>
+
+    <div class="card stats-card stats-bridge">
+      <div class="card-header">Bridge
+        <label class="tx-master-radio tx-master-auto" title="TX-Master automatisch (5 s Idle-Release)">
+          <input type="radio" name="tx-master" value="auto"> Auto
+        </label>
+      </div>
+      <div class="card-body">
+        <div class="stat-big"><span id="st-br-sinks">…</span></div>
+        <small class="stat-sub">aktive Sinks</small>
+        <div class="stat-row"><span>RX (USB→Sinks)</span><b id="st-br-rx">…</b></div>
+        <div class="stat-row"><span>TX (Sinks→USB)</span><b id="st-br-tx">…</b></div>
+        <div class="stat-row"><span>Drops (not ready)</span><b id="st-br-drop">…</b></div>
+        <div class="stat-row"><span>TX-Master</span><b id="st-br-master">…</b></div>
+        <div class="stat-row"><span>Lock-Rejects</span><b id="st-br-rejlock">…</b></div>
+      </div>
+    </div>
+
+    <div class="card stats-card stats-hmu">
+      <div class="card-header">HMUARTLGW Legacy
+        <span id="st-hmu-warn" class="rf-state-pill" title="Phase B+C+D Health"></span>
+        <label class="tx-master-radio" title="diesen Sink als TX-Master pinnen">
+          <input type="radio" name="tx-master" value="hmu"> Lock
+        </label>
+      </div>
+      <div class="card-body">
+        <div class="stat-big"><span id="st-hmu-clients">…</span> / 4</div>
+        <small class="stat-sub">FHEM-Clients · Port <span id="st-hmu-port">2330</span></small>
+        <div class="stat-row"><span>Connects</span><b id="st-hmu-conn">…</b></div>
+        <div class="stat-row"><span>TX (FHEM→Stick)</span><b id="st-hmu-tx">…</b></div>
+        <div class="stat-row"><span>ACKs routed</span><b id="st-hmu-ack">…</b></div>
+        <div class="stat-row"><span>ACKs orphaned</span><b id="st-hmu-orph">…</b></div>
+        <div class="stat-row"><span>ACKs foreign</span><b id="st-hmu-foreign">…</b></div>
+        <div class="stat-row"><span>RX (Stick→FHEM)</span><b id="st-hmu-rx">…</b></div>
+        <div class="stat-row"><span>AES-Keys (NVS)</span><b id="st-hmu-aes">…</b></div>
+      </div>
+    </div>
+
+    <div class="card stats-card stats-sys">
+      <div class="card-header">System</div>
+      <div class="card-body">
+        <div class="stat-row"><span>Uptime</span><b id="st-uptime">…</b></div>
+        <div class="stat-row"><span>Free Heap</span><b id="st-heap">…</b></div>
+        <div class="stat-row"><span>Letzter Reset</span><b id="st-reset">…</b></div>
+        <div class="stat-row"><span>FW gebaut</span><b id="st-built">…</b></div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ============== Config (WiFi + Reboot + OTA) ============== -->
+  <div class="card config-card">
+    <div class="card-header">Konfiguration</div>
+    <div class="card-body">
+
+      <h3 class="config-h">Aktionen</h3>
+      <button id="btn-reboot" class="btn-secondary">Reboot</button>
+      <small class="config-hint">
+        WiFi-Konfiguration siehe Netzwerk-Kachel oben („WiFi konfigurieren…").
+        Alternativen: Improv-Serial auf UART0 in den ersten 120 s nach Boot
+        (ESP Web Tools, <code>improv_client.py</code>) oder das
+        Captive-AP-Fallback („RFNetHM XXXX") wenn keine Creds passen.
+      </small>
+
+      <h3 class="config-h">OTA-Update</h3>
+      <form id="ota-form" class="config-form">
+        <input id="ota-file" type="file" accept=".bin">
+        <button type="submit" class="btn-primary">Hochladen + Reboot</button>
+        <span id="ota-msg" class="config-msg"></span>
+      </form>
+      <small class="config-hint">
+        Erwartet ein <code>firmware.bin</code> aus dem PlatformIO-Build.
+        Schreibt in die inaktive OTA-Slot, flippt Boot, rebootet in 500 ms.
+      </small>
+
+    </div>
+  </div>
+
+</main>
+
+<main id="tab-console" class="container tab-pane">
+  <div class="card console-card">
+    <div class="card-header">Debug-Console
+      <span id="console-state" class="rf-state-pill">…</span>
+    </div>
+    <div class="console-bar">
+      <button id="btn-log-clear" class="btn-secondary" type="button">Clear-View</button>
+      <label class="console-opt"><input type="checkbox" id="log-autoscroll" checked> Auto-scroll</label>
+      <span id="console-info" class="config-msg"></span>
+    </div>
+    <pre id="console-pane" class="console-pane">…lade Log-Buffer…</pre>
+  </div>
+</main>
+
+<!-- ============== WiFi-Modal ============== -->
+<div id="wifi-modal" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="wifi-modal-title">
+  <div class="modal-card">
+    <button class="modal-close" id="wifi-modal-close" aria-label="schließen">&times;</button>
+    <h2 id="wifi-modal-title" class="modal-title">WLAN konfigurieren</h2>
+
+    <div class="modal-row">
+      <label for="wifi-scan-select">Verfügbare Netzwerke</label>
+      <select id="wifi-scan-select"><option value="">— noch nicht gescannt —</option></select>
+    </div>
+    <div class="modal-actions" style="margin-top:0;">
+      <button id="btn-wifi-scan" type="button" class="btn-secondary">Scannen</button>
+    </div>
+
+    <div class="modal-row" style="margin-top:1rem;">
+      <label for="wifi-modal-ssid">SSID</label>
+      <input id="wifi-modal-ssid" type="text" autocomplete="off" placeholder="z.B. AILab">
+    </div>
+    <div class="modal-row">
+      <label for="wifi-modal-pass">Passwort</label>
+      <input id="wifi-modal-pass" type="password" autocomplete="new-password" placeholder="leer bei offenem Netz">
+    </div>
+
+    <div class="modal-actions">
+      <button id="btn-wifi-connect" type="button" class="btn-primary">Speichern + Reboot</button>
+    </div>
+    <div id="wifi-modal-msg" class="modal-msg"></div>
+
+    <hr class="modal-divider">
+    <div class="modal-actions">
+      <button id="btn-wifi-reset" type="button" class="btn-danger">Creds löschen → AP-Mode</button>
+    </div>
+    <small class="config-hint">
+      Erzwingt das Captive-AP-Fallback: nach Reboot öffnet das Gerät den
+      offenen AP <code>RFNetHM XXXX</code> (XXXX = letzte 4 Hex-Stellen
+      der Base-MAC). Verbinden, Browser zeigt automatisch die Konfig-Seite.
+    </small>
+  </div>
+</div>
+
+<footer class="footer">
+  <span>RFNetHM by <a href="https://busware.de" target="_blank" rel="noopener">busware</a></span> ·
+  <span>HmIP-USB ↔ HB-RF-ETH-Bridge</span> ·
+  <span><a href="https://github.com/tostmann" target="_blank" rel="noopener">GitHub</a></span> ·
+  <span id="footer-build">…</span>
+</footer>
+
+<script src="/app.js?v=3"></script>
+</body>
+</html>
