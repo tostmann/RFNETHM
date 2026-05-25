@@ -10,6 +10,9 @@
 #include "hmu_frame.h"
 #include <string.h>
 
+const uint8_t HMU_PL_IDENTIFY[1]   = { 0x01 };
+const uint8_t HMU_PL_CHANGE_APP[1] = { 0x03 };
+
 uint16_t hmu_crc16(const uint8_t *data, size_t len)
 {
     uint16_t crc = HMU_CRC_INIT;

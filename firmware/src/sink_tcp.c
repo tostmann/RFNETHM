@@ -185,37 +185,33 @@ static void on_rx(sink_t *s, const uint8_t *data, size_t len)
     (void)s;
     if (!data || !len) return;
 
-    // Snapshot active sockets under mutex; send outside mutex.
-    int socks[SINK_TCP_MAX_CLIENTS];
-    int n = 0;
+    // Mutex hält für den ganzen Fanout-Loop — schützt gegen fd-
+    // Wiederverwendung zwischen Snapshot und send (close in client_task
+    // gibt fd frei, accept_task kann sofort denselben fd für eine andere
+    // Verbindung kassieren).  send() ist MSG_DONTWAIT, also non-blocking;
+    // bei SINK_TCP_MAX_CLIENTS=4 ist die Hold-Time vernachlässigbar.
     xSemaphoreTake(S.mtx, portMAX_DELAY);
     for (int i = 0; i < SINK_TCP_MAX_CLIENTS; i++) {
-        if (S.clients[i].active && S.clients[i].sock >= 0) {
-            socks[n++] = S.clients[i].sock;
-        }
-    }
-    xSemaphoreGive(S.mtx);
-
-    for (int i = 0; i < n; i++) {
-        ssize_t w = send(socks[i], data, len, MSG_DONTWAIT);
+        tcp_client_t *c = &S.clients[i];
+        if (!c->active || c->sock < 0) continue;
+        ssize_t w = send(c->sock, data, len, MSG_DONTWAIT);
         if (w < 0) {
             if (errno == EAGAIN || errno == EWOULDBLOCK) {
                 S.stats.tx_dropped_eagain++;
             } else {
                 ESP_LOGW(TAG, "send to sock=%d failed errno=%d — closing",
-                         socks[i], errno);
-                // close out-of-band: the client's recv() will return 0
-                // and the per-client task will free the slot.
-                shutdown(socks[i], SHUT_RDWR);
+                         c->sock, errno);
+                // shutdown nur — der zugehörige client_task macht close()
+                // im Cleanup-Pfad.  Wir touchen den Slot hier sonst nicht.
+                shutdown(c->sock, SHUT_RDWR);
             }
         } else if ((size_t)w < len) {
-            // Short write — not handled in this simple raw-byte sink.
-            // Bytes lost; counted via stats anyway.
             S.stats.tx_bytes_to_clients += (uint32_t)w;
         } else {
             S.stats.tx_bytes_to_clients += len;
         }
     }
+    xSemaphoreGive(S.mtx);
 }
 
 static const char *describe(sink_t *s)

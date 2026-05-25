@@ -5,6 +5,7 @@
 #include "version.h"
 #include "bridge.h"
 #include "source_usb.h"
+#include "source_uart.h"
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -148,7 +149,10 @@ static struct {
 static void send_frame(hmu_client_t *c, uint8_t dst, uint8_t cnt,
                        const uint8_t *payload, size_t plen)
 {
-    static uint8_t buf[HMU_MAX_FRAME_ESC];
+    // Stack-Allokation: Race-frei zwischen client_task, hello_trampoline,
+    // route_llmac_ack_to_fhem (verschiedene Tasks).  HMU_MAX_FRAME_ESC ist
+    // ~1 KB, client_task hat 6 KB Stack — ok.
+    uint8_t buf[HMU_MAX_FRAME_ESC];
     int n = hmu_frame_encode(dst, cnt, payload, plen, buf, sizeof(buf));
     if (n < 0) {
         ESP_LOGW(TAG, "frame_encode failed (plen=%u)", (unsigned)plen);
@@ -377,12 +381,45 @@ static void respond_app(hmu_client_t *c, uint8_t cnt, uint8_t cmd,
 // Aktuelles Hardware-Setup (HmIP-RFUSB nur via USB-Host) liefert
 // `DualCoPro_App` — Bypass ist somit unerreichbar in dieser
 // Konfiguration.  Code ist defensiv für die Pin-Header-Variante.
+// Aktive Source (USB oder UART) abfragen — Bridge entscheidet, welche.
+// Liefert connected/boot_done/tag der aktiven Source; bei detached oder
+// unbekannter short_id alles auf "nicht ready".
+typedef struct {
+    bool connected;
+    bool boot_done;
+    char tag[32];
+} active_source_state_t;
+
+static void get_active_source_state(active_source_state_t *out)
+{
+    out->connected = false;
+    out->boot_done = false;
+    out->tag[0]    = '\0';
+
+    source_t *src = bridge_get_source();
+    if (!src || !src->short_id) return;
+
+    if (strcmp(src->short_id, "usb") == 0) {
+        source_usb_stats_t us;
+        source_usb_get_stats(&us);
+        out->connected = us.stick_connected;
+        out->boot_done = us.boot_done;
+        snprintf(out->tag, sizeof(out->tag), "%s", us.app_tag);
+    } else if (strcmp(src->short_id, "uart") == 0) {
+        source_uart_stats_t us;
+        source_uart_get_stats(&us);
+        out->connected = us.module_present;
+        out->boot_done = us.boot_done;
+        snprintf(out->tag, sizeof(out->tag), "%s", us.app_tag);
+    }
+}
+
 static bool is_bypass_mode(void)
 {
-    source_usb_stats_t us;
-    source_usb_get_stats(&us);
-    return us.stick_connected && us.boot_done &&
-           strcmp(us.app_tag, "Co_CPU_App") == 0;
+    active_source_state_t st;
+    get_active_source_state(&st);
+    return st.connected && st.boot_done &&
+           strcmp(st.tag, "Co_CPU_App") == 0;
 }
 
 // ─── Phase D: AES-Key NVS-Persistenz (storage-only) ───────────────────
@@ -409,8 +446,13 @@ static void persist_aes_key(const char *key, const uint8_t *blob, size_t len)
 }
 
 // ─── Pending-ACK (Phase B): cnt → client mapping ──────────────────────
+//
+// Aufrufer dieser Helper MÜSSEN S.mtx halten — pending[] wird sowohl
+// vom client_task (pending_alloc nach Translation) als auch vom
+// source-RX-Task (pending_find_and_take in route_llmac_ack_to_fhem)
+// mutiert.
 
-static void pending_gc(void)
+static void pending_gc_locked(void)
 {
     int64_t now = esp_timer_get_time();
     for (int i = 0; i < PENDING_ACK_SLOTS; i++) {
@@ -423,9 +465,9 @@ static void pending_gc(void)
     }
 }
 
-static int pending_alloc(uint8_t cnt, hmu_client_t *c)
+static int pending_alloc_locked(uint8_t cnt, hmu_client_t *c)
 {
-    pending_gc();
+    pending_gc_locked();
     for (int i = 0; i < PENDING_ACK_SLOTS; i++) {
         if (!S.pending[i].active) {
             S.pending[i].active  = true;
@@ -438,7 +480,7 @@ static int pending_alloc(uint8_t cnt, hmu_client_t *c)
     return -1;
 }
 
-static pending_ack_t *pending_find_and_take(uint8_t cnt)
+static pending_ack_t *pending_find_and_take_locked(uint8_t cnt)
 {
     for (int i = 0; i < PENDING_ACK_SLOTS; i++) {
         if (S.pending[i].active && S.pending[i].cnt == cnt) {
@@ -469,20 +511,22 @@ static bool handle_app_send_legacy(hmu_client_t *c, uint8_t cnt,
     }
 
     // Source ready prüfen — sonst würde das Frame im void verschwinden.
-    source_usb_stats_t us;
-    source_usb_get_stats(&us);
-    if (!us.stick_connected || !us.boot_done) {
-        ESP_LOGW(TAG, "APP_SEND but stick not ready (conn=%d boot=%d)",
-                 us.stick_connected, us.boot_done);
+    // Aktive Source kann USB oder UART sein (siehe is_bypass_mode/
+    // get_active_source_state).
+    active_source_state_t st;
+    get_active_source_state(&st);
+    if (!st.connected || !st.boot_done) {
+        ESP_LOGW(TAG, "APP_SEND but source not ready (conn=%d boot=%d)",
+                 st.connected, st.boot_done);
         return false;
     }
 
-    // Wenn der Stick irgendwann mal als Co_CPU_App auftritt (Pin-Header
-    // statt USB), dann haben wir keinen Translation-Bedarf — die Quelle
-    // spricht nativ Legacy.  Phase D macht den Bypass-Mode komplett;
-    // hier loggen wir den Fall, falls er auftritt.
-    if (strcmp(us.app_tag, "Co_CPU_App") == 0) {
-        ESP_LOGW(TAG, "Co_CPU_App source — Phase B/D bypass not yet wired");
+    // Wenn die Source bereits Co_CPU_App spricht (z.B. HM-MOD-RPI-PCB am
+    // UART), spricht sie nativ Legacy → keine Translation, der Pfad
+    // gehört in is_bypass_mode/s_on_source_rx-Bypass.  Hier landet ein
+    // APP_SEND nur wenn die Source DualCoPro_App (oder kompatibel) ist.
+    if (strcmp(st.tag, "Co_CPU_App") == 0) {
+        ESP_LOGW(TAG, "Co_CPU_App source — APP_SEND should be handled by bypass path");
         return false;
     }
 
@@ -505,8 +549,8 @@ static bool handle_app_send_legacy(hmu_client_t *c, uint8_t cnt,
     dc_len += body_len;
 
     // Wire-Frame mit dst=LLMAC=0x03, cnt = original-FHEM-cnt (Stick
-    // spiegelt das in seinem ACK).
-    static uint8_t wire[HMU_MAX_FRAME_ESC];
+    // spiegelt das in seinem ACK).  Stack-Allokation (siehe send_frame).
+    uint8_t wire[HMU_MAX_FRAME_ESC];
     int n = hmu_frame_encode(DST_LLMAC, cnt, dc_payload, dc_len,
                               wire, sizeof(wire));
     if (n < 0) {
@@ -515,8 +559,13 @@ static bool handle_app_send_legacy(hmu_client_t *c, uint8_t cnt,
     }
 
     // Pending-Slot reservieren BEVOR der Frame in der Bridge verschwindet,
-    // sonst race wenn der Stick blitz-schnell antwortet.
-    int slot = pending_alloc(cnt, c);
+    // sonst race wenn der Stick blitz-schnell antwortet.  Allokation
+    // unter S.mtx, danach release — bridge_tx_to_source darf NICHT mit
+    // S.mtx gehalten laufen (Lock-Reihenfolge S.mtx → bridge-mtx ist
+    // sonst andersrum bei route_llmac_ack_to_fhem aus dem RX-Pfad).
+    xSemaphoreTake(S.mtx, portMAX_DELAY);
+    int slot = pending_alloc_locked(cnt, c);
+    xSemaphoreGive(S.mtx);
     if (slot < 0) {
         ESP_LOGW(TAG, "pending-ACK pool full — dropping APP_SEND");
         return false;
@@ -524,7 +573,9 @@ static bool handle_app_send_legacy(hmu_client_t *c, uint8_t cnt,
 
     esp_err_t err = bridge_tx_to_source(&S.self, wire, (size_t)n);
     if (err != ESP_OK) {
+        xSemaphoreTake(S.mtx, portMAX_DELAY);
         S.pending[slot].active = false;
+        xSemaphoreGive(S.mtx);
         if (err == BRIDGE_ERR_TX_LOCKED) {
             ESP_LOGW(TAG, "APP_SEND rejected: TX-lock owned by another sink");
         } else {
@@ -546,7 +597,7 @@ static void route_llmac_ack_to_fhem(uint8_t cnt,
 {
     pending_ack_t *p;
     xSemaphoreTake(S.mtx, portMAX_DELAY);
-    p = pending_find_and_take(cnt);
+    p = pending_find_and_take_locked(cnt);
     if (!p) {
         // Fan-out: jeder LLMAC_ACK landet bei allen Sinks.  Wenn der ACK
         // einem TX gehört, das ein anderer Sink (z.B. HB-RF-ETH) gemacht
@@ -798,6 +849,15 @@ static void accept_task(void *arg)
             continue;
         }
 
+        // SO_SNDTIMEO 100 ms — schützt hello_trampoline (esp_timer-Task)
+        // und alle send_frame-Aufrufer aus Source-RX-Tasks vor einem
+        // langsamen FHEM-Client: blocking send() blockt max 100 ms, kein
+        // unbegrenzter Stall mehr.  100 ms ist großzügig für LAN; bei
+        // produktivem Stau wäre eher ein Client-Problem als ein Netz-
+        // Problem.
+        struct timeval snd_to = { .tv_sec = 0, .tv_usec = 100000 };
+        setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &snd_to, sizeof(snd_to));
+
         xSemaphoreTake(S.mtx, portMAX_DELAY);
         hmu_client_t *c = find_free_slot();
         if (!c) {
@@ -837,16 +897,36 @@ static void s_on_source_rx(sink_t *self, const uint8_t *data, size_t len)
 
     if (is_bypass_mode()) {
         // Co_CPU_App-Source spricht bereits Legacy — direktes
-        // Byte-Fanout an alle aktiven FHEM-Clients.
+        // Byte-Fanout an alle aktiven FHEM-Clients.  Snapshot der Sockets
+        // unter S.mtx, dann MSG_DONTWAIT-send ohne Mutex — sonst kann ein
+        // langsamer Client die ganze Source-RX-Pipeline einfrieren
+        // (Source-Driver-Buffer läuft voll, Frames vom HM-Modul gehen
+        // verloren).
+        int socks[SINK_HMUARTLGW_LEGACY_MAX_CLIENTS];
+        int nsocks = 0;
         xSemaphoreTake(S.mtx, portMAX_DELAY);
         for (int i = 0; i < SINK_HMUARTLGW_LEGACY_MAX_CLIENTS; i++) {
             hmu_client_t *c = &S.clients[i];
             if (c->active && c->sock >= 0) {
-                send(c->sock, data, len, 0);
-                S.stats.bypass_rx_bytes += len;
+                socks[nsocks++] = c->sock;
             }
         }
         xSemaphoreGive(S.mtx);
+
+        for (int i = 0; i < nsocks; i++) {
+            ssize_t w = send(socks[i], data, len, MSG_DONTWAIT);
+            if (w < 0) {
+                if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                    S.stats.bypass_tx_dropped++;
+                } else {
+                    ESP_LOGW(TAG, "bypass send sock=%d failed errno=%d — closing",
+                             socks[i], errno);
+                    shutdown(socks[i], SHUT_RDWR);
+                }
+            } else {
+                S.stats.bypass_rx_bytes += (uint32_t)w;
+            }
+        }
         return;
     }
 
@@ -934,6 +1014,8 @@ sink_t *sink_hmuartlgw_legacy_init(uint16_t port)
 void sink_hmuartlgw_legacy_get_stats(sink_hmuartlgw_legacy_stats_t *out)
 {
     if (!out) return;
+    xSemaphoreTake(S.mtx, portMAX_DELAY);
     *out = S.stats;
     out->port = S.port;
+    xSemaphoreGive(S.mtx);
 }

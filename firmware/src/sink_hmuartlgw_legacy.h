@@ -54,6 +54,7 @@ typedef struct {
     uint32_t llmac_recv_broadcast;// Phase C — LLMAC_RECV → APP_RECV
     uint32_t bypass_rx_bytes;     // Phase D — passthrough source→FHEM
     uint32_t bypass_tx_bytes;     // Phase D — passthrough FHEM→source
+    uint32_t bypass_tx_dropped;   // Phase D — fanout drops (EAGAIN / send-error)
     uint32_t aes_keys_persisted;  // Phase D — NVS-stored keys (storage-only)
 } sink_hmuartlgw_legacy_stats_t;
 

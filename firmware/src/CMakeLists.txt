@@ -10,14 +10,16 @@ idf_component_register(
                 "sink_hbrfeth.c"
                 "sink_hmuartlgw_legacy.c"
                 "log_buffer.c"
-                "hm_probe.c"
                 "webui.c"
                 "mdns_glue.c"
+                "ota_check.c"
                 "improv_glue.cpp"
     INCLUDE_DIRS "."
     REQUIRES     usb driver usb_host_cdc_acm
                  nvs_flash esp_wifi esp_event esp_netif lwip
-                 esp_http_server app_update esp_app_format esp_timer
+                 esp_http_server esp_http_client esp-tls
+                 app_update esp_app_format esp_timer
+                 json
                  improv_wifi_busware
                  mdns
     EMBED_FILES

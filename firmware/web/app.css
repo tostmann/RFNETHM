@@ -213,6 +213,8 @@ body {
 #brand-stack.brand-stack-low { background: var(--pill-crash-bg); color: var(--pill-crash-fg); font-weight: 600; }
 #brand-coredump    { background: var(--pill-crash-bg);   color: var(--pill-crash-fg); font-weight: 700; text-decoration: none; letter-spacing: 0.06em; }
 #brand-coredump.brand-coredump-hidden { display: none; }
+#brand-update      { background: var(--pill-ok-bg);      color: var(--pill-ok-fg);    font-weight: 700; text-decoration: none; letter-spacing: 0.06em; }
+#brand-update.brand-update-hidden { display: none; }
 
 /* Theme-Toggle (Sun/Moon-Button in der Navbar) ----------------------- */
 .theme-toggle {

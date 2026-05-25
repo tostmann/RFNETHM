@@ -48,6 +48,7 @@ typedef struct {
     uint32_t rx_frames_from_clients;     // Type-7 Richtung Source
     uint32_t tx_frames_to_clients;        // Type-7 Richtung Client
     uint32_t tx_dropped_not_started;      // Sink hat Bytes aber kein StartConn
+    uint32_t tx_dropped_eagain;           // sendto EAGAIN (lwIP TX-Queue voll)
 } sink_hbrfeth_stats_t;
 
 void sink_hbrfeth_get_stats(sink_hbrfeth_stats_t *out);

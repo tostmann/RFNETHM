@@ -107,20 +107,18 @@ static void client_disconnect(hb_client_t *c)
     S.stats.total_disconnects++;
 }
 
-// Build [type, cnt, payload, crc-be] and sendto().  Caller holds mtx.
-static void send_typed(uint32_t ip, uint16_t port, uint8_t type,
-                       const uint8_t *payload, size_t plen,
-                       const uint8_t *cnt_override)
+// Build [type, cnt, payload, crc-be] and sendto().  Reiner I/O-Helper —
+// kein Mutex-Take, kein State-Mutate; Caller liefert cnt explizit.
+// MSG_DONTWAIT: UDP-sendto kann bei voller TX-Queue blockieren; wir wollen
+// das in keinem Pfad (on_rx-Fanout, keepalive im esp_timer-Task, in-mutex
+// CONNECT-Reply).
+static void emit_typed(uint32_t ip, uint16_t port, uint8_t type, uint8_t cnt,
+                       const uint8_t *payload, size_t plen)
 {
     uint8_t buf[1500];
     if (plen + 4 > sizeof(buf)) return;
     buf[0] = type;
-    if (cnt_override) {
-        buf[1] = *cnt_override;
-    } else {
-        hb_client_t *c = find(ip, port);
-        buf[1] = c ? c->tx_counter++ : 0;
-    }
+    buf[1] = cnt;
     if (plen) memcpy(buf + 2, payload, plen);
     uint16_t crc = hmu_crc16(buf, 2 + plen);
     buf[2 + plen]     = (uint8_t)((crc >> 8) & 0xff);
@@ -131,7 +129,28 @@ static void send_typed(uint32_t ip, uint16_t port, uint8_t type,
         .sin_addr.s_addr = ip,
         .sin_port        = htons(port),
     };
-    sendto(S.sock, buf, plen + 4, 0, (struct sockaddr *)&dst, sizeof(dst));
+    ssize_t w = sendto(S.sock, buf, plen + 4, MSG_DONTWAIT,
+                       (struct sockaddr *)&dst, sizeof(dst));
+    if (w < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+        S.stats.tx_dropped_eagain++;
+    }
+}
+
+// In-mutex Variant: nimmt den counter aus clients[].  Caller MUSS mtx
+// halten.  Wird nur noch aus handle_packet (CONNECT-Reply) gerufen, wo
+// der Mutex ohnehin gehalten ist.
+static void send_typed_locked(uint32_t ip, uint16_t port, uint8_t type,
+                              const uint8_t *payload, size_t plen,
+                              const uint8_t *cnt_override)
+{
+    uint8_t cnt;
+    if (cnt_override) {
+        cnt = *cnt_override;
+    } else {
+        hb_client_t *c = find(ip, port);
+        cnt = c ? c->tx_counter++ : 0;
+    }
+    emit_typed(ip, port, type, cnt, payload, plen);
 }
 
 // ───── Packet handling ──────────────────────────────────────────────────
@@ -182,7 +201,7 @@ static void handle_packet(const uint8_t *data, size_t len, uint32_t ip, uint16_t
             // V1: reply [status=1, mirror_cnt]
             c->endpoint_id += 2;
             uint8_t resp[2] = { 1, cnt };
-            send_typed(ip, port, T_CONNECT, resp, 2, NULL);
+            send_typed_locked(ip, port, T_CONNECT, resp, 2, NULL);
             ESP_LOGI(TAG, "V1 CONNECT from %d.%d.%d.%d:%u (ep_id=%u)",
                      (int)((ip      )&0xff), (int)((ip >>  8)&0xff),
                      (int)((ip >> 16)&0xff), (int)((ip >> 24)&0xff),
@@ -212,7 +231,7 @@ static void handle_packet(const uint8_t *data, size_t len, uint32_t ip, uint16_t
                 c->endpoint_id = client_ep;   // adopt + resume
             }
             uint8_t resp[3] = { 2, cnt, c->endpoint_id };
-            send_typed(ip, port, T_CONNECT, resp, 3, NULL);
+            send_typed_locked(ip, port, T_CONNECT, resp, 3, NULL);
             ESP_LOGI(TAG, "V2 CONNECT from %d.%d.%d.%d:%u (ep_id=%u%s)",
                      (int)((ip      )&0xff), (int)((ip >>  8)&0xff),
                      (int)((ip >> 16)&0xff), (int)((ip >> 24)&0xff),
@@ -338,6 +357,13 @@ static void keepalive_tick(void *arg)
     if (!S.started_flag) return;
     int64_t now = esp_timer_get_time();
 
+    // Läuft im shared esp_timer-Task — sendto() darf den NICHT lange
+    // blockieren (würde alle anderen periodischen Timer mitziehen).
+    // Snapshot der KA-fälligen Clients unter Mutex, dann sendto ohne
+    // Mutex über emit_typed (MSG_DONTWAIT).
+    struct { uint32_t ip; uint16_t port; uint8_t cnt; } snap[SINK_HBRFETH_MAX_CLIENTS];
+    int nsnap = 0;
+
     xSemaphoreTake(S.mtx, portMAX_DELAY);
     for (int i = 0; i < SINK_HBRFETH_MAX_CLIENTS; i++) {
         hb_client_t *c = &S.clients[i];
@@ -351,9 +377,16 @@ static void keepalive_tick(void *arg)
             client_disconnect(c);
             continue;
         }
-        send_typed(c->ip, c->port, T_KEEPALIVE, NULL, 0, NULL);
+        snap[nsnap].ip   = c->ip;
+        snap[nsnap].port = c->port;
+        snap[nsnap].cnt  = c->tx_counter++;
+        nsnap++;
     }
     xSemaphoreGive(S.mtx);
+
+    for (int i = 0; i < nsnap; i++) {
+        emit_typed(snap[i].ip, snap[i].port, T_KEEPALIVE, snap[i].cnt, NULL, 0);
+    }
 }
 
 // ───── sink_t-Hooks ─────────────────────────────────────────────────────
@@ -366,6 +399,13 @@ static void on_rx(sink_t *self, const uint8_t *data, size_t len)
     (void)self;
     if (!data || !len) return;
 
+    // Snapshot der TX-Empfänger unter Mutex (auch tx_counter-Inkrement),
+    // dann emit_typed ohne Mutex — sonst stallt ein langsamer sendto
+    // (lwIP-TX-Queue) andere Bridge-Tasks (z.B. den Source-Supervisor)
+    // beim Versuch S.mtx zu nehmen.
+    struct { uint32_t ip; uint16_t port; uint8_t cnt; } snap[SINK_HBRFETH_MAX_CLIENTS];
+    int nsnap = 0;
+
     xSemaphoreTake(S.mtx, portMAX_DELAY);
     for (int i = 0; i < SINK_HBRFETH_MAX_CLIENTS; i++) {
         hb_client_t *c = &S.clients[i];
@@ -374,10 +414,17 @@ static void on_rx(sink_t *self, const uint8_t *data, size_t len)
             S.stats.tx_dropped_not_started++;
             continue;
         }
-        send_typed(c->ip, c->port, T_FRAME, data, len, NULL);
+        snap[nsnap].ip   = c->ip;
+        snap[nsnap].port = c->port;
+        snap[nsnap].cnt  = c->tx_counter++;
+        nsnap++;
         S.stats.tx_frames_to_clients++;
     }
     xSemaphoreGive(S.mtx);
+
+    for (int i = 0; i < nsnap; i++) {
+        emit_typed(snap[i].ip, snap[i].port, T_FRAME, snap[i].cnt, data, len);
+    }
 }
 
 static const char *describe(sink_t *s)
