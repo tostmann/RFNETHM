@@ -93,19 +93,9 @@ static struct {
     bool                      boot_done;
     char                      app_tag[32];
     char                      describe_buf[80];
-    usb_host_client_handle_t  enum_client;    // for VID/PID enum dump only
 } S;
 
 // ───── Helpers ──────────────────────────────────────────────────────────
-
-static const char *speed_str(usb_speed_t s) {
-    switch (s) {
-    case USB_SPEED_LOW:  return "LS";
-    case USB_SPEED_FULL: return "FS";
-    case USB_SPEED_HIGH: return "HS";
-    default:             return "?";
-    }
-}
 
 static void vbus_init(void)
 {
@@ -198,8 +188,8 @@ static void usb_frame_cb(void *ctx, uint8_t dst, uint8_t cnt,
 static bool cdc_data_cb(const uint8_t *data, size_t len, void *arg)
 {
     (void)arg;
-    ESP_LOGI(TAG, "RX %u bytes (raw, on-wire):", (unsigned)len);
-    ESP_LOG_BUFFER_HEXDUMP(TAG, data, len, ESP_LOG_INFO);
+    ESP_LOGD(TAG, "RX %u bytes (raw, on-wire):", (unsigned)len);
+    ESP_LOG_BUFFER_HEXDUMP(TAG, data, len, ESP_LOG_DEBUG);
 
     // Always feed the boot-probe decoder.
     hmu_decoder_feed(&S.decoder, data, len);
@@ -309,14 +299,12 @@ static void drain_boot_q(void)
 
 static bool boot_to_app(uint8_t *cnt_io)
 {
-    static const uint8_t IDENTIFY_PL[1]   = { 0x01 };
-    static const uint8_t CHANGE_APP_PL[1] = { 0x03 };
     const TickType_t T = pdMS_TO_TICKS(1500);
 
     drain_boot_q();
 
     if (encode_and_send(HMU_DST_COMMON, (*cnt_io)++,
-                        IDENTIFY_PL, sizeof(IDENTIFY_PL),
+                        HMU_PL_IDENTIFY, sizeof(HMU_PL_IDENTIFY),
                         "COMMON_IDENTIFY (probe 1)") != ESP_OK)
         return false;
 
@@ -335,7 +323,7 @@ static bool boot_to_app(uint8_t *cnt_io)
     } else if (ev.klass == BOOT_TAG_BL) {
         ESP_LOGW(TAG, "boot: BL ('%s') → CHANGE_APP", ev.tag);
         if (encode_and_send(HMU_DST_COMMON, (*cnt_io)++,
-                            CHANGE_APP_PL, sizeof(CHANGE_APP_PL),
+                            HMU_PL_CHANGE_APP, sizeof(HMU_PL_CHANGE_APP),
                             "COMMON_CHANGE_APP") != ESP_OK)
             return false;
         if (!wait_boot_event(&ev, T)) {
@@ -355,7 +343,7 @@ static bool boot_to_app(uint8_t *cnt_io)
     }
 
     if (encode_and_send(HMU_DST_COMMON, (*cnt_io)++,
-                        IDENTIFY_PL, sizeof(IDENTIFY_PL),
+                        HMU_PL_IDENTIFY, sizeof(HMU_PL_IDENTIFY),
                         "COMMON_IDENTIFY (verify)") != ESP_OK)
         return false;
     if (!wait_boot_event(&ev, T)) {
@@ -500,44 +488,6 @@ static const struct source_ops s_usb_ops = {
     .describe = op_describe,
 };
 
-// ───── Generic-Enumeration-Client (für VID/PID-Diagnose) ────────────────
-
-static void dump_device(uint8_t addr)
-{
-    usb_device_handle_t dev;
-    if (usb_host_device_open(S.enum_client, addr, &dev) != ESP_OK) return;
-    usb_device_info_t info;
-    if (usb_host_device_info(dev, &info) == ESP_OK) {
-        ESP_LOGI(TAG, "speed=%s  bConfigurationValue=%u",
-                 speed_str(info.speed), info.bConfigurationValue);
-    }
-    const usb_device_desc_t *dd = NULL;
-    if (usb_host_get_device_descriptor(dev, &dd) == ESP_OK && dd) {
-        ESP_LOGI(TAG, "VID:PID = %04X:%04X   bcdUSB %x.%02x   bcdDevice %x.%02x",
-                 dd->idVendor, dd->idProduct,
-                 dd->bcdUSB >> 8, dd->bcdUSB & 0xFF,
-                 dd->bcdDevice >> 8, dd->bcdDevice & 0xFF);
-    }
-    usb_host_device_close(S.enum_client, dev);
-}
-
-static void enum_client_event_cb(const usb_host_client_event_msg_t *m, void *arg)
-{
-    (void)arg;
-    if (m->event == USB_HOST_CLIENT_EVENT_NEW_DEV) {
-        ESP_LOGI(TAG, "==== NEW_DEV (addr=%d) ====", m->new_dev.address);
-        dump_device(m->new_dev.address);
-    } else if (m->event == USB_HOST_CLIENT_EVENT_DEV_GONE) {
-        ESP_LOGI(TAG, "==== DEV_GONE ====");
-    }
-}
-
-static void enum_client_task(void *arg)
-{
-    (void)arg;
-    while (1) usb_host_client_handle_events(S.enum_client, portMAX_DELAY);
-}
-
 static void usb_lib_task(void *arg)
 {
     (void)arg;
@@ -568,17 +518,6 @@ source_t *source_usb_init(void)
     };
     ESP_ERROR_CHECK(usb_host_install(&host_cfg));
     xTaskCreate(usb_lib_task, "usb_lib", 4096, NULL, 5, NULL);
-
-    const usb_host_client_config_t client_cfg = {
-        .is_synchronous    = false,
-        .max_num_event_msg = 5,
-        .async = {
-            .client_event_callback = enum_client_event_cb,
-            .callback_arg          = NULL,
-        },
-    };
-    ESP_ERROR_CHECK(usb_host_client_register(&client_cfg, &S.enum_client));
-    xTaskCreate(enum_client_task, "usb_enum", 4096, NULL, 4, NULL);
 
     ESP_ERROR_CHECK(cdc_acm_host_install(NULL));
     xTaskCreate(stick_task, "stick", 6144, NULL, 4, NULL);

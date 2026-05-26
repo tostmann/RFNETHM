@@ -48,7 +48,10 @@ static bool               s_external_control;   // v0.10: Improv-managed?
 
 static void captive_dns_task(void *arg);
 static void deferred_ap_fallback_task(void *arg);
+static void sta_recovery_task(void *arg);
 static TaskHandle_t       s_dns_task;
+static TaskHandle_t       s_sta_recov_task;
+static const uint32_t     STA_RECOVERY_PERIOD_MS = 60 * 1000;
 
 // ─── Helpers ──────────────────────────────────────────────────────────
 
@@ -315,7 +318,33 @@ esp_err_t net_start_softap(void)
     if (!s_dns_task) {
         xTaskCreate(captive_dns_task, "cap_dns", 3072, NULL, 4, &s_dns_task);
     }
+    // Hintergrund-STA-Recovery: periodischer esp_wifi_connect()-Versuch,
+    // damit wir nicht für immer im SoftAP-Fallback festhängen wenn der
+    // STA-AP nur kurz weg war (Reboot/Re-Auth/Channel-Change).
+    if (!s_sta_recov_task && s_ssid_buf[0] != '\0') {
+        xTaskCreate(sta_recovery_task, "sta_recov", 3072, NULL, 4,
+                    &s_sta_recov_task);
+    }
     return ESP_OK;
+}
+
+// Periodischer Reconnect-Versuch nach SoftAP-Fallback.  Resettet den
+// retry-Counter, schickt esp_wifi_connect() und überlässt das Outcome
+// dem normalen STA-Event-Pfad (GOT_IP loggt + setzt s_connected; bei
+// erneuter Disconnect-Salve landen wir wieder hier nach STA_RECOVERY_PERIOD_MS).
+static void sta_recovery_task(void *arg)
+{
+    ESP_LOGI(TAG, "sta_recovery: armed (period=%us)",
+             (unsigned)(STA_RECOVERY_PERIOD_MS / 1000));
+    while (1) {
+        vTaskDelay(pdMS_TO_TICKS(STA_RECOVERY_PERIOD_MS));
+        if (s_external_control) continue;
+        if (s_connected)        continue;
+        if (s_ssid_buf[0] == '\0') continue;
+        s_retry_count = 0;   // Budget für die nächste retry-Salve aus dem Event-Handler
+        ESP_LOGW(TAG, "sta_recovery: trying esp_wifi_connect() to '%s'", s_ssid_buf);
+        esp_wifi_connect();
+    }
 }
 
 // ─── Async-Scan via esp_wifi_scan_start ───────────────────────────────

@@ -11,7 +11,7 @@
 //   GPIO16 → eQ3-Pin 12 → HM-MOD-RPI-PCB RST (TRX1.4 C2CK/RST, active LOW)
 //   GPIO7  → eQ3-Pin 35 → RPI-RF-MOD     RST (alternative)
 //
-// Boot-Probe (verbatim vom hm_probe.c-Erfolgs-Run):
+// Boot-Probe:
 //   1. RST GPIO16 active-LOW pulse → Release mit ESP-internem Pull-Up
 //   2. Boot-Banner abwarten → Tag (BL oder App)
 //   3. Falls _BL: dst=OS cmd=0x03 SYSTEM_START_APP → wait Push
@@ -228,14 +228,19 @@ static esp_err_t encode_and_send(uint8_t dst, uint8_t cnt,
                                  const uint8_t *payload, size_t payload_len,
                                  const char *label)
 {
+    // out[] ist static um Stack zu sparen (~1 KB).  Encode + Write MÜSSEN
+    // unter tx_mtx liegen — sonst kann ein zweiter Aufrufer (z.B. cmd=4
+    // aus hb_rx-Task während Boot-Probe aus init-Task) das Frame im
+    // Buffer überschreiben bevor der erste tx_mtx greift.
     static uint8_t out[HMU_MAX_FRAME_ESC];
+    xSemaphoreTake(S.tx_mtx, portMAX_DELAY);
     int n = hmu_frame_encode(dst, cnt, payload, payload_len, out, sizeof(out));
     if (n < 0) {
+        xSemaphoreGive(S.tx_mtx);
         ESP_LOGE(TAG, "TX %s: encode failed", label);
         return ESP_FAIL;
     }
     ESP_LOGI(TAG, "TX %s cnt=0x%02X (%d bytes)", label, cnt, n);
-    xSemaphoreTake(S.tx_mtx, portMAX_DELAY);
     int wrote = uart_write_bytes(UART_NUM, out, (size_t)n);
     xSemaphoreGive(S.tx_mtx);
     return wrote == n ? ESP_OK : ESP_FAIL;
@@ -315,8 +320,6 @@ static bool reset_and_get_banner(boot_event_t *ev_out)
 // nötig, finaler App-Mode verifiziert.
 static bool boot_probe(uint8_t *cnt_io)
 {
-    static const uint8_t IDENTIFY_PL[1]  = { 0x01 };
-    static const uint8_t CHANGE_APP_PL[1] = { 0x03 };
     // 3500ms: RPI-RF-MOD/DualCoPro braucht nach CHANGE_APP empirisch
     // ~2200ms bis der App-Push kommt (Live-Probe 2026-05-11).  HM-MOD ist
     // schneller, aber early-return on success kostet hier nichts.
@@ -329,7 +332,7 @@ static bool boot_probe(uint8_t *cnt_io)
     if (!got_banner) {
         ESP_LOGI(TAG, "kein Banner — IDENTIFY explicit (Modul evtl. schon im App-Mode)");
         if (encode_and_send(HMU_DST_COMMON, (*cnt_io)++,
-                            IDENTIFY_PL, sizeof(IDENTIFY_PL),
+                            HMU_PL_IDENTIFY, sizeof(HMU_PL_IDENTIFY),
                             "COMMON_IDENTIFY (probe)") != ESP_OK)
             return false;
         if (!wait_boot_event(&ev, T)) {
@@ -368,7 +371,7 @@ static bool boot_probe(uint8_t *cnt_io)
                  fam == FAMILY_DUALCOPRO ? "DualCoPro" : "Legacy", label);
 
         if (encode_and_send(change_app_dst, (*cnt_io)++,
-                            CHANGE_APP_PL, sizeof(CHANGE_APP_PL),
+                            HMU_PL_CHANGE_APP, sizeof(HMU_PL_CHANGE_APP),
                             label) != ESP_OK)
             return false;
         if (!wait_boot_event(&ev, T)) {
@@ -391,7 +394,7 @@ static bool boot_probe(uint8_t *cnt_io)
     char saved_tag[32];
     snprintf(saved_tag, sizeof(saved_tag), "%s", ev.tag);
     if (encode_and_send(HMU_DST_COMMON, (*cnt_io)++,
-                        IDENTIFY_PL, sizeof(IDENTIFY_PL),
+                        HMU_PL_IDENTIFY, sizeof(HMU_PL_IDENTIFY),
                         "COMMON_IDENTIFY (verify)") == ESP_OK) {
         if (wait_boot_event(&ev, T) && ev.klass == BOOT_TAG_APP) {
             ESP_LOGW(TAG, "boot: Verify-Reply '%s' bestätigt App-Mode", ev.tag);

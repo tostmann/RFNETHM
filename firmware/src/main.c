@@ -64,7 +64,6 @@ static source_t *s_src_usb;
 static void source_supervisor_task(void *arg)
 {
     (void)arg;
-    source_t *prev = NULL;
 
     // Supervisor ist die Keystone-Task: wenn sie hängt, friert das
     // Source-Hot-Swap-Verhalten ein.  Subscribe an TWDT (5 s timeout aus
@@ -79,13 +78,17 @@ static void source_supervisor_task(void *arg)
         esp_task_wdt_reset();
         vTaskDelay(pdMS_TO_TICKS(500));
 
+        // Tatsächlichen Bridge-Zustand abfragen — sonst kann eine lokale
+        // Tracking-Variable mit der Realität divergieren (z.B. wenn ein
+        // attach mal fehlschlägt oder eine andere Stelle die Bridge
+        // umschaltet).
+        source_t *cur = bridge_get_source();
+
         // Flash-Lock-Schutz: wenn UART mid-flash, einfach nichts machen.
         if (source_uart_is_flash_locked()) {
-            if (prev != s_src_uart) {
-                // Erstmaliger Flash-Lock: UART hart attachen + Pin
+            if (cur != s_src_uart) {
                 ESP_LOGW(TAG, "supervisor: UART flash-lock active — pinning bridge to UART");
                 bridge_attach_source(s_src_uart);
-                prev = s_src_uart;
             }
             continue;
         }
@@ -95,18 +98,17 @@ static void source_supervisor_task(void *arg)
         source_t *want  = usb_ready  ? s_src_usb
                        : uart_ready ? s_src_uart
                        :              NULL;
-        if (want == prev) continue;
+        if (want == cur) continue;
         if (want) {
             ESP_LOGW(TAG, "supervisor: %s → %s",
-                     prev ? source_describe(prev) : "(none)",
+                     cur ? source_describe(cur) : "(none)",
                      source_describe(want));
             bridge_attach_source(want);
-        } else if (prev) {
+        } else if (cur) {
             ESP_LOGW(TAG, "supervisor: detach (%s lost, no fallback)",
-                     source_describe(prev));
-            bridge_detach_source(prev);
+                     source_describe(cur));
+            bridge_detach_source(cur);
         }
-        prev = want;
     }
 }
 
@@ -142,6 +144,9 @@ static void log_health_line(void)
             }
         }
         vPortFree(snap);
+    } else {
+        ESP_LOGW(TAG, "health: pvPortMalloc(%u tasks) failed — stack HWM skipped",
+                 (unsigned)ntasks);
     }
 
     ESP_LOGI(TAG, "health: heap free=%u min=%u largest=%u | tasks=%u tightest='%s' hwm=%u words",
@@ -157,11 +162,12 @@ static void log_health_line(void)
                  tightest_name, (unsigned)tightest_hwm, (unsigned)STACK_LOW_WARN_WORDS);
     }
 
-    // Coredump-Check bei Boot ist üblich; aber das hier ist die regelmäßige
-    // Health-Zeile, also nur eine kurze Notiz wenn ein Image vorliegt.
-    if (esp_core_dump_image_check() == ESP_OK) {
-        ESP_LOGW(TAG, "health: coredump image present in flash — fetch via /api/coredump");
-    }
+    // Coredump-Check entfernt aus der Health-Loop:
+    // esp_core_dump_image_check() macht eine synchrone SPI-Flash-Lesung
+    // und produzierte 1 ESP-IDF-internen "Incorrect size: 1"-E-Log pro
+    // 60s.  Coredump-Existenz wird beim Boot-Banner einmalig geloggt
+    // (siehe app_main) und ist über /api/status.sys.coredump abrufbar
+    // (Cache in webui.c).
 }
 
 void app_main(void)
@@ -174,7 +180,6 @@ void app_main(void)
     printf("=================================================\n");
     printf("  RFNetHM   v%s\n", FW_VERSION_STRING);
     printf("  built     %s\n", FW_BUILD_DATE);
-    printf("  WiFi + Raw-TCP + HB-RF-ETH-UDP + WebUI + OTA + Improv (v0.10) [OTA-OK-VERIFIED]\n");
     printf("=================================================\n");
 
     bridge_init();

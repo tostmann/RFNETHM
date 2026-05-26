@@ -35,9 +35,10 @@
 #define BRIDGE_SINK_ID_MAXLEN    16
 #define BRIDGE_TX_AUTO_IDLE_US   5000000     // 5 s Idle bis Lock-Release im AUTO
 
-// ESP-IDF hat in der hier benutzten Version (5.5.3) noch kein
-// ESP_ERR_NOT_PERMITTED — eigener Sentinel im Custom-Bereich.
-#define BRIDGE_ERR_TX_LOCKED     ((esp_err_t)0xE0F1)
+// "TX rejected, lock owned by anderer Sink" — semantisch identisch zu
+// ESP_ERR_NOT_ALLOWED (IDF 5.5.x).  Kein selbsterfundener Sentinel im
+// 0xE0xx-Range mehr — der konnte mit zukünftigen IDF-Werten kollidieren.
+#define BRIDGE_ERR_TX_LOCKED     ESP_ERR_NOT_ALLOWED
 
 // Initialisiere die globale Bridge.  Muss einmal beim Start aufgerufen
 // werden bevor irgendeine source/sink-API genutzt wird.

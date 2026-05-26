@@ -87,7 +87,16 @@ void on_connected_cb(const char *ssid, const char *psk, void * /*user*/)
 {
     ESP_LOGI(TAG, "provisioned to '%s' — persisting in rfnethm NVS",
              ssid ? ssid : "?");
-    net_persist_creds(ssid ? ssid : "", psk ? psk : "");
+    esp_err_t err = net_persist_creds(ssid ? ssid : "", psk ? psk : "");
+    if (err != ESP_OK) {
+        // STA läuft live, aber NVS-Schreiben gescheitert → nächster Reboot
+        // landet im Captive-AP.  Hier können wir nichts mehr machen ausser
+        // den User per Log warnen; Improv selbst hat schon "Success" an den
+        // BLE-Client zurückgemeldet.
+        ESP_LOGE(TAG, "net_persist_creds failed (%s) — creds NOT persisted, "
+                      "next reboot falls back to Captive-AP",
+                 esp_err_to_name(err));
+    }
     // Kein Reboot — Lib hat den STA bereits hochgezogen, der nächste
     // Boot nimmt die persistierten Creds und beschneidet das Improv-
     // Window auf WINDOW_MS_HASCREDS (30 s) — kurz, aber nicht aus,
@@ -114,9 +123,12 @@ void improv_task(void * /*arg*/)
                      static_cast<int>(s_inst->isArmed()));
             s_armed = false;
             net_set_external_control(false);
-            // Driver eingebaut lassen — späterer Code könnte UART
-            // weiter brauchen (Console-Echo etc.).  Nur die Lib hält
-            // sich raus.
+            // Driver eingebaut lassen — printf/ESP_LOG nutzen UART0 weiter
+            // über VFS und brauchen den installed driver.  ABER: RX-Pfad
+            // abdrehen, sonst sammelt der 512-B-Buffer Müll vom Terminal
+            // bis er voll ist und einfach weitere Bytes verwirft.
+            uart_disable_rx_intr(UART_NUM);
+            uart_flush_input(UART_NUM);
             break;
         }
 
@@ -149,14 +161,19 @@ extern "C" esp_err_t improv_init(void)
     cfg.flow_ctrl           = UART_HW_FLOWCTRL_DISABLE;
     cfg.source_clk          = UART_SCLK_DEFAULT;
 
-    esp_err_t err = uart_param_config(UART_NUM, &cfg);
-    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
-        ESP_LOGE(TAG, "uart_param_config failed: %s", esp_err_to_name(err));
-        return err;
-    }
-    err = uart_driver_install(UART_NUM, UART_RX_BUF, UART_TX_BUF, 0, nullptr, 0);
+    // ESP-IDF-Konvention: uart_driver_install ZUERST, dann
+    // uart_param_config — manche IDF-Versionen werden bei umgekehrter
+    // Reihenfolge strenger (param_config schlägt fehl wenn der Driver
+    // noch nicht installiert ist).  ESP_ERR_INVALID_STATE bei install
+    // tolerieren wir, weil der ROM-Default-Driver schon mal sein kann.
+    esp_err_t err = uart_driver_install(UART_NUM, UART_RX_BUF, UART_TX_BUF, 0, nullptr, 0);
     if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
         ESP_LOGE(TAG, "uart_driver_install failed: %s", esp_err_to_name(err));
+        return err;
+    }
+    err = uart_param_config(UART_NUM, &cfg);
+    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+        ESP_LOGE(TAG, "uart_param_config failed: %s", esp_err_to_name(err));
         return err;
     }
 

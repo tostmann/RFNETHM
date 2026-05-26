@@ -1,9 +1,20 @@
-# RFNETHM v0.1 — sdkconfig defaults for ESP32-S3-WROOM-1 (16 MB QIO flash, 8 MB OctalPSRAM).
+# RFNETHM v0.1 — sdkconfig defaults for ESP32-S3-WROOM-1 (16 MB flash, 8 MB OctalPSRAM).
 # Anything not listed here uses IDF defaults.
 
 # ---- Flash ---------------------------------------------------------------
+# Mode = DIO (NICHT QIO!).  Why:
+# QIO benötigt die WP-/HOLD-Pins als zusätzliche Datenleitungen.  Bei vielen
+# ESP32-S3-Modulen (insbesondere günstigen Klonen ohne WP-Pull) crasht der
+# 2nd-stage-Bootloader in ets_loader.c:78 → TG0WDT_SYS_RST-Loop.
+# Symptom Public-Bootloop 2026-05-21 via Webflasher.
+# Performance-Verlust gegenüber QIO ist akzeptabel (Flash-Read halbiert sich,
+# ist aber nicht im Hot-Path: nur Boot + OTA + Coredump).
+# Lokales esptool `--flash_mode dio`-Override hat das früher kaschiert weil
+# es den Image-Header zur Write-Time patcht; der Bootloader-Code selbst
+# wurde aber weiter mit QIO-Setup kompiliert → Webflasher-User crashen,
+# Lab-Boards (mit funktionierendem WP-Pin) liefen weiter durch.
 CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
-CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
+CONFIG_ESPTOOLPY_FLASHMODE_DIO=y
 CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
 
 # ---- Console -------------------------------------------------------------
@@ -34,6 +45,21 @@ CONFIG_ESP_COREDUMP_MAX_TASKS_NUM=32
 CONFIG_ESP_COREDUMP_USE_STACK_SIZE=y
 CONFIG_ESP_COREDUMP_STACK_SIZE=1024
 
+# Task-WDT-Panic: bei Task-Watchdog-Trigger soll ein vollständiger Panic
+# mit Stack-Trace laufen (= Coredump landet in flash), statt nur ein
+# Warning-Log und Weitermachen.  Pflicht für die Crash-Diagnose der
+# 2026-05-21 Reboots-mit-reset_reason=POWERON (Vermutung: WDT-Trigger
+# der so hart resettet dass RTC den Latch verliert → POWERON-Latch).
+# Default ist „nur loggen, weiterfahren" — viel zu lasch für Crashes
+# die wir reproduzierbar erfassen müssen.
+CONFIG_ESP_TASK_WDT_PANIC=y
+
+# Panic-Handler in IRAM ablegen — sonst kann der Handler selbst nicht
+# laufen wenn Flash-Cache im Crash-Moment disabled war (Coredump-Write
+# zu Flash benötigt aber Cache).  Billig (~paar KB IRAM), aber rettet
+# Coredumps in Flash-Operation-Crash-Pfaden.
+CONFIG_ESP_PANIC_HANDLER_IRAM=y
+
 # FreeRTOS trace-facility: aktiviert uxTaskGetSystemState() für die
 # Stack-HWM-Übersicht im 60-s-Statslog + /api/tasks.
 # VTASKLIST_INCLUDE_COREID legt das xCoreID-Feld in TaskStatus_t an —
@@ -42,3 +68,11 @@ CONFIG_ESP_COREDUMP_STACK_SIZE=1024
 CONFIG_FREERTOS_USE_TRACE_FACILITY=y
 CONFIG_FREERTOS_USE_STATS_FORMATTING_FUNCTIONS=y
 CONFIG_FREERTOS_VTASKLIST_INCLUDE_COREID=y
+
+# ---- LWIP-Pool ---------------------------------------------------------
+# Default 10 ist eng wenn drei Listener (httpd:80, raw:2329, hmu:2330)
+# plus httpd-internal-pool-7 plus mdns/dhcp gleichzeitig laufen.
+# Stress-Test 2026-05-25 hat reproduzierbar 100% HTTP-Connection-Refused
+# bei parallelem Connect-Storm gezeigt — der Pool war ausgeschöpft.
+# 16 gibt genug Reserve für 4+4+4 sink-clients + httpd + listener.
+CONFIG_LWIP_MAX_SOCKETS=16

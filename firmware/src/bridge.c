@@ -60,6 +60,10 @@ void bridge_init(void)
 void bridge_attach_source(source_t *src)
 {
     if (!src) return;
+    // attach/detach unter s_br.mtx — sonst sehen parallele
+    // bridge_tx_to_source / bridge_get_source partielle Updates
+    // (z.B. s_br.source schon gesetzt, rx_sink noch alt).
+    xSemaphoreTake(s_br.mtx, portMAX_DELAY);
     if (s_br.source && s_br.source != src) {
         ESP_LOGW(TAG, "source swap: %s →", source_describe(s_br.source));
         s_br.source->rx_sink     = NULL;
@@ -68,21 +72,30 @@ void bridge_attach_source(source_t *src)
     s_br.source = src;
     src->rx_sink     = bridge_on_source_rx;
     src->rx_sink_ctx = NULL;
+    xSemaphoreGive(s_br.mtx);
     ESP_LOGI(TAG, "source attached: %s", source_describe(src));
 }
 
 void bridge_detach_source(source_t *src)
 {
     if (!src) return;
+    xSemaphoreTake(s_br.mtx, portMAX_DELAY);
     if (s_br.source == src) {
         ESP_LOGW(TAG, "source detached: %s", source_describe(src));
         src->rx_sink     = NULL;
         src->rx_sink_ctx = NULL;
         s_br.source      = NULL;
     }
+    xSemaphoreGive(s_br.mtx);
 }
 
-source_t *bridge_get_source(void) { return s_br.source; }
+source_t *bridge_get_source(void)
+{
+    xSemaphoreTake(s_br.mtx, portMAX_DELAY);
+    source_t *s = s_br.source;
+    xSemaphoreGive(s_br.mtx);
+    return s;
+}
 
 esp_err_t bridge_attach_sink(sink_t *sink, const char *short_id)
 {
@@ -132,10 +145,17 @@ void bridge_on_source_rx(void *ctx, const uint8_t *data, size_t len)
 
 esp_err_t bridge_tx_to_source(sink_t *who, const uint8_t *data, size_t len)
 {
-    if (!s_br.source || !source_ready(s_br.source)) {
+    // Source-Pointer atomar snapshotten — sonst kann der Supervisor
+    // mid-call das s_br.source-Feld nullen (bridge_detach_source) und
+    // wir dereferenzieren NULL in source_ready/source_tx.
+    xSemaphoreTake(s_br.mtx, portMAX_DELAY);
+    source_t *src = s_br.source;
+    if (!src || !source_ready(src)) {
         s_br.stats.tx_dropped_not_ready++;
+        xSemaphoreGive(s_br.mtx);
         return ESP_ERR_INVALID_STATE;
     }
+    xSemaphoreGive(s_br.mtx);
 
     // Lock-Check (nur wenn `who` gesetzt — NULL = system, bypass).
     if (who) {
@@ -184,7 +204,7 @@ esp_err_t bridge_tx_to_source(sink_t *who, const uint8_t *data, size_t len)
         xSemaphoreGive(s_br.mtx);
     }
 
-    esp_err_t err = source_tx(s_br.source, data, len);
+    esp_err_t err = source_tx(src, data, len);
     if (err == ESP_OK) {
         xSemaphoreTake(s_br.mtx, portMAX_DELAY);
         s_br.stats.tx_bytes_total += len;

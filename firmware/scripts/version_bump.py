@@ -111,12 +111,51 @@ def _git_autocommit(prev_version_str):
     return True
 
 
+def _parse_release_tag(tag):
+    """Parse a release tag like 'v0.14.138' or '0.14.138' into (MAJOR, MINOR, BUILD).
+
+    Returns None if the tag doesn't match.  Used by release.sh to bake a
+    tag-based version into the build (overriding the auto-counter), so
+    factory.bin + manifest.json + firmware.bin all carry the same
+    user-facing version string.
+    """
+    s = tag.strip().lstrip("v")
+    parts = s.split(".")
+    if len(parts) != 3:
+        return None
+    try:
+        return int(parts[0]), int(parts[1]), int(parts[2])
+    except ValueError:
+        return None
+
+
 def main():
     major, minor = _read_version()
     prev_build = _read_build()
     new_build  = prev_build + 1
     prev_version = f"{major}.{minor}.{prev_build}"
-    new_version  = f"{major}.{minor}.{new_build}"
+
+    # Release-Tag-Override (BOSE-Style):
+    # Wenn RELEASE_TAG-env gesetzt ist, baut der Build mit diesem
+    # Tag als FW_VERSION_STRING — counter bumpt trotzdem (für die
+    # git-snapshot-Historie), aber das, was im Binary landet und
+    # später in manifest.json + im /api/status erscheint, ist die
+    # Tag-Version.  Damit sind alle Release-Artefakte versionsgleich.
+    release_tag = os.environ.get("RELEASE_TAG", "").strip()
+    parsed = _parse_release_tag(release_tag) if release_tag else None
+    if release_tag and not parsed:
+        raise RuntimeError(
+            f"RELEASE_TAG={release_tag!r} kann ich nicht parsen — "
+            "erwartet wird MAJOR.MINOR.BUILD (z.B. v0.14.138)."
+        )
+    if parsed:
+        rt_major, rt_minor, rt_build = parsed
+        fw_major, fw_minor, fw_build = rt_major, rt_minor, rt_build
+        new_version = f"{rt_major}.{rt_minor}.{rt_build}"
+        print(f"[version_bump] RELEASE_TAG=v{new_version} — overriding counter for FW_VERSION_*")
+    else:
+        fw_major, fw_minor, fw_build = major, minor, new_build
+        new_version = f"{major}.{minor}.{new_build}"
 
     if REPO_ROOT:
         if _git_autocommit(prev_version):
@@ -133,9 +172,9 @@ def main():
 #ifndef VERSION_H
 #define VERSION_H
 
-#define FW_VERSION_MAJOR  {major}
-#define FW_VERSION_MINOR  {minor}
-#define FW_VERSION_BUILD  {new_build}
+#define FW_VERSION_MAJOR  {fw_major}
+#define FW_VERSION_MINOR  {fw_minor}
+#define FW_VERSION_BUILD  {fw_build}
 
 #define FW_VERSION_STRING "{new_version}"
 #define FW_BUILD_DATE     "{now}"
@@ -145,7 +184,7 @@ def main():
     os.makedirs(os.path.dirname(HEADER_FILE), exist_ok=True)
     _atomic_write(HEADER_FILE, header)
 
-    print(f"[version_bump] FW v{new_version}  built {now}")
+    print(f"[version_bump] FW v{new_version}  built {now}  (counter={new_build})")
 
 
 main()

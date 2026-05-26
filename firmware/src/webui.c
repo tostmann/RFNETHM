@@ -10,6 +10,7 @@
 #include "sink_hbrfeth.h"
 #include "sink_hmuartlgw_legacy.h"
 #include "log_buffer.h"
+#include "ota_check.h"
 
 #include "esp_http_server.h"
 #include "esp_log.h"
@@ -21,6 +22,7 @@
 #include "esp_core_dump.h"
 #include "esp_partition.h"
 #include "esp_flash.h"
+#include "esp_app_desc.h"
 #include "nvs.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -30,9 +32,67 @@
 static const char *TAG = "webui";
 static httpd_handle_t s_http;
 
-#define NVS_NS    "rfnethm"
-#define NVS_SSID  "wifi_ssid"
-#define NVS_PASS  "wifi_pass"
+// Cached coredump-present flag.  esp_core_dump_image_check() macht eine
+// synchrone SPI-Flash-Lesung, die bei /api/status-Hochfrequenz spürbare
+// Latenz + ESP-IDF-internen Log-Lärm produziert (E "Incorrect size: 1"
+// pro Aufruf bei leerer/korrupter Partition).  Da Coredumps nur durch
+// einen ESP-Crash neu entstehen (= Reboot, → Re-Init), reicht ein
+// einziger Check pro Boot.  h_coredump_delete invalidiert den Cache nach
+// erfolgreichem Erase, damit /api/status den neuen State sofort sieht.
+static bool s_coredump_present = false;
+
+// ───── Maintenance-Auth (optional Token) ────────────────────────────────
+//
+// Wenn ein Token in NVS gesetzt ist, verlangen alle destructive Endpoints
+// einen `X-Auth-Token:`-Header mit demselben Wert.  Wenn KEIN Token in NVS
+// gesetzt ist (Default-Fresh-Boot), bleiben die Endpoints offen — kompat
+// zum bisherigen Verhalten, kein Lockout-Risiko.
+//
+// Token-Setzen geht über POST /api/auth/token mit Body
+// {"token":"<neuer-string>"} — ist Auth bereits aktiv, muss der bestehende
+// Token im X-Auth-Token-Header mit.  Clear: DELETE /api/auth/token (auch
+// auth-geschützt wenn aktiv).
+#define AUTH_NVS_NS    "rfnh_auth"
+#define AUTH_NVS_TOKEN "token"
+#define AUTH_TOKEN_MAX 64
+
+static void auth_get_token(char *out, size_t cap)
+{
+    if (cap == 0) return;
+    out[0] = '\0';
+    nvs_handle_t h;
+    if (nvs_open(AUTH_NVS_NS, NVS_READONLY, &h) != ESP_OK) return;
+    size_t sz = cap;
+    nvs_get_str(h, AUTH_NVS_TOKEN, out, &sz);
+    nvs_close(h);
+}
+
+// Liefert ESP_OK wenn (a) kein Auth aktiv oder (b) Header matchen.
+// Bei Mismatch: 401-Response gesendet, ESP_FAIL zurück.  Handler MUSS
+// in dem Fall sofort returnen.
+static esp_err_t require_auth_or_401(httpd_req_t *req)
+{
+    char saved[AUTH_TOKEN_MAX];
+    auth_get_token(saved, sizeof(saved));
+    if (saved[0] == '\0') return ESP_OK;   // auth nicht aktiv
+
+    char header[AUTH_TOKEN_MAX] = {0};
+    esp_err_t e = httpd_req_get_hdr_value_str(req, "X-Auth-Token",
+                                              header, sizeof(header));
+    if (e != ESP_OK || header[0] == '\0') {
+        httpd_resp_set_status(req, "401 Unauthorized");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_send(req, "{\"error\":\"missing X-Auth-Token\"}", 32);
+        return ESP_FAIL;
+    }
+    if (strcmp(header, saved) != 0) {
+        httpd_resp_set_status(req, "401 Unauthorized");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_send(req, "{\"error\":\"invalid token\"}", 25);
+        return ESP_FAIL;
+    }
+    return ESP_OK;
+}
 
 // ───── Embedded static assets (siehe src/CMakeLists.txt EMBED_FILES) ────
 //
@@ -111,6 +171,31 @@ static esp_err_t h_logo_white(httpd_req_t *req)
                            busmatic_white_png_end - busmatic_white_png_start);
 }
 
+// Schreibt einen JSON-string-Body (ohne umgebende Anführungszeichen) escaped
+// in `dst`.  `"` und `\` werden mit Backslash escaped, Steuerzeichen als
+// \uXXXX.  Pflicht für Strings aus externen Quellen (SSID, HM-Modul-Tag),
+// damit eine SSID mit `"` im Namen nicht das ganze JSON kaputt macht.
+static void json_escape(const char *src, char *dst, size_t dst_cap)
+{
+    if (dst_cap == 0) return;
+    if (!src) src = "";
+    size_t i = 0;
+    while (*src && i + 7 < dst_cap) {
+        unsigned char c = (unsigned char)*src++;
+        if (c == '"' || c == '\\') {
+            dst[i++] = '\\';
+            dst[i++] = c;
+        } else if (c < 0x20) {
+            int w = snprintf(dst + i, dst_cap - i, "\\u%04x", c);
+            if (w < 0) break;
+            i += (size_t)w;
+        } else {
+            dst[i++] = c;
+        }
+    }
+    dst[i] = '\0';
+}
+
 // ───── /api/status ──────────────────────────────────────────────────────
 
 static esp_err_t h_status(httpd_req_t *req)
@@ -164,10 +249,21 @@ static esp_err_t h_status(httpd_req_t *req)
                 }
             }
             vPortFree(snap);
+        } else {
+            ESP_LOGW(TAG, "h_status: pvPortMalloc(%u tasks) failed — stack HWM skipped",
+                     (unsigned)ntasks);
         }
         if (tightest == 0xFFFFFFFFu) tightest = 0;
     }
-    bool coredump_present = (esp_core_dump_image_check() == ESP_OK);
+    bool coredump_present = s_coredump_present;
+
+    // Externe Strings escapen — SSID kann beliebige UTF-8/Sonderzeichen
+    // enthalten, app_tag kommt vom HM-Modul-Banner (validiert, aber
+    // defensiv).  Buffer pro Quelle 200 B = 32 raw × 6 (worst-case \uXXXX) + NUL.
+    char ssid_esc[200], usb_tag_esc[200], uart_tag_esc[200];
+    json_escape(net_ssid(),  ssid_esc,     sizeof(ssid_esc));
+    json_escape(us.app_tag,  usb_tag_esc,  sizeof(usb_tag_esc));
+    json_escape(uts.app_tag, uart_tag_esc, sizeof(uart_tag_esc));
 
     char buf[3000];
     int n = snprintf(buf, sizeof(buf),
@@ -198,18 +294,18 @@ static esp_err_t h_status(httpd_req_t *req)
                    "\"coredump\":%s,\"reset_reason\":\"%s\"}"
         "}",
         FW_VERSION_STRING, FW_BUILD_DATE,
-        net_is_connected() ? "true" : "false", net_ssid(), net_ip_str(),
+        net_is_connected() ? "true" : "false", ssid_esc, net_ip_str(),
         net_is_ap_mode() ? "true" : "false", net_hostname(),
         active_src,
         us.stick_connected ? "true" : "false",
         us.boot_done       ? "true" : "false",
-        us.app_tag,
+        usb_tag_esc,
         (unsigned)us.frames_ok, (unsigned)us.frames_crc_err,
         (unsigned)us.frames_truncated, (unsigned)us.bytes_skipped,
         uts.module_present ? "true" : "false",
         uts.boot_done      ? "true" : "false",
         uts.flash_lock     ? "true" : "false",
-        uts.app_tag,
+        uart_tag_esc,
         (unsigned)uts.frames_ok, (unsigned)uts.frames_crc_err,
         (unsigned)uts.frames_truncated, (unsigned)uts.bytes_skipped,
         (unsigned)bs.sink_count,
@@ -289,6 +385,7 @@ static bool json_field_truthy(const char *in, const char *key)
 
 static esp_err_t h_wifi(httpd_req_t *req)
 {
+    if (require_auth_or_401(req) != ESP_OK) return ESP_FAIL;
     char body[256];
     int  total = 0;
     while (total < (int)sizeof(body) - 1) {
@@ -308,16 +405,19 @@ static esp_err_t h_wifi(httpd_req_t *req)
     }
     json_field(body, "pass", pass, sizeof(pass));   // empty pass = open net
 
-    nvs_handle_t h;
-    esp_err_t err = nvs_open(NVS_NS, NVS_READWRITE, &h);
+    // Persistenz UND in-memory-Buffer (s_ssid_buf/s_pass_buf in net.c) in
+    // einem Call — sonst zeigt /api/status oder net_ssid() bis zum nächsten
+    // Reboot noch die alte SSID.  Returnwert ist hart geprüft, sonst
+    // bekommt der User ein {"saved":true} obwohl der nvs_commit gefailt
+    // ist.
+    esp_err_t err = net_persist_creds(ssid, pass);
     if (err != ESP_OK) {
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "nvs_open");
+        ESP_LOGE(TAG, "h_wifi: net_persist_creds failed: %s",
+                 esp_err_to_name(err));
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR,
+                            "persist failed");
         return ESP_FAIL;
     }
-    nvs_set_str(h, NVS_SSID, ssid);
-    nvs_set_str(h, NVS_PASS, pass);
-    nvs_commit(h);
-    nvs_close(h);
     ESP_LOGW(TAG, "saved WiFi creds via WebUI (ssid='%s')", ssid);
 
     httpd_resp_set_type(req, "application/json");
@@ -380,8 +480,75 @@ static void delayed_reboot_task(void *arg)
     esp_restart();
 }
 
+// ───── /api/auth/* — Maintenance-Token verwalten ────────────────────────
+
+static esp_err_t h_auth_status(httpd_req_t *req)
+{
+    char tok[AUTH_TOKEN_MAX];
+    auth_get_token(tok, sizeof(tok));
+    httpd_resp_set_type(req, "application/json");
+    return httpd_resp_send(req,
+        tok[0] ? "{\"enabled\":true}" : "{\"enabled\":false}",
+        tok[0] ? 16 : 17);
+}
+
+static esp_err_t h_auth_token_post(httpd_req_t *req)
+{
+    if (require_auth_or_401(req) != ESP_OK) return ESP_FAIL;
+
+    char body[128] = {0};
+    int total = 0;
+    while (total < (int)sizeof(body) - 1) {
+        int r = httpd_req_recv(req, body + total, sizeof(body) - 1 - total);
+        if (r <= 0) {
+            if (r == HTTPD_SOCK_ERR_TIMEOUT) continue;
+            break;
+        }
+        total += r;
+    }
+    body[total] = '\0';
+
+    char newtok[AUTH_TOKEN_MAX] = {0};
+    if (json_field(body, "token", newtok, sizeof(newtok)) != 0 || newtok[0] == '\0') {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "missing token");
+        return ESP_FAIL;
+    }
+    nvs_handle_t h;
+    if (nvs_open(AUTH_NVS_NS, NVS_READWRITE, &h) != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "nvs_open");
+        return ESP_FAIL;
+    }
+    esp_err_t err = nvs_set_str(h, AUTH_NVS_TOKEN, newtok);
+    if (err == ESP_OK) err = nvs_commit(h);
+    nvs_close(h);
+    if (err != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "nvs write");
+        return ESP_FAIL;
+    }
+    ESP_LOGW(TAG, "auth: token set (len=%u)", (unsigned)strlen(newtok));
+    httpd_resp_set_type(req, "application/json");
+    return httpd_resp_send(req, "{\"enabled\":true,\"saved\":true}", 28);
+}
+
+static esp_err_t h_auth_token_delete(httpd_req_t *req)
+{
+    if (require_auth_or_401(req) != ESP_OK) return ESP_FAIL;
+    nvs_handle_t h;
+    if (nvs_open(AUTH_NVS_NS, NVS_READWRITE, &h) != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "nvs_open");
+        return ESP_FAIL;
+    }
+    nvs_erase_key(h, AUTH_NVS_TOKEN);
+    nvs_commit(h);
+    nvs_close(h);
+    ESP_LOGW(TAG, "auth: token cleared");
+    httpd_resp_set_type(req, "application/json");
+    return httpd_resp_send(req, "{\"enabled\":false,\"cleared\":true}", 32);
+}
+
 static esp_err_t h_wifi_reset(httpd_req_t *req)
 {
+    if (require_auth_or_401(req) != ESP_OK) return ESP_FAIL;
     esp_err_t err = net_clear_creds();
     if (err != ESP_OK) {
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "nvs erase failed");
@@ -406,6 +573,7 @@ static esp_err_t h_wifi_reset(httpd_req_t *req)
 // Response: {"status":"ok|fail","tag":"<bl-tag|app-tag>"}
 static esp_err_t h_source_uart_reset(httpd_req_t *req)
 {
+    if (require_auth_or_401(req) != ESP_OK) return ESP_FAIL;
     char body[128] = {0};
     int  total = 0;
     while (total < (int)sizeof(body) - 1) {
@@ -537,6 +705,7 @@ static esp_err_t h_not_found(httpd_req_t *req, httpd_err_code_t err)
 
 static esp_err_t h_reboot(httpd_req_t *req)
 {
+    if (require_auth_or_401(req) != ESP_OK) return ESP_FAIL;
     httpd_resp_set_type(req, "application/json");
     httpd_resp_send(req, "{\"rebooting\":true}", 18);
     xTaskCreate(delayed_reboot_task, "reboot", 2048, NULL, 5, NULL);
@@ -550,12 +719,28 @@ static esp_err_t h_reboot(httpd_req_t *req)
 
 static esp_err_t h_ota(httpd_req_t *req)
 {
+    if (require_auth_or_401(req) != ESP_OK) return ESP_FAIL;
+
     const esp_partition_t *upd = esp_ota_get_next_update_partition(NULL);
     if (!upd) {
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "no OTA partition");
         return ESP_FAIL;
     }
-    ESP_LOGW(TAG, "OTA: writing to '%s' (size %u)", upd->label, (unsigned)upd->size);
+
+    // Content-Length-Sanity: mind. 256 KB (RFNetHM ist >1 MB; ein
+    // sinnvoll-knapper Lower-Bound), max. partition-size − 4 KB Headroom
+    // (esp_ota_write würde sonst irgendwann mit ESP_ERR_OTA_VALIDATE_FAILED
+    // brechen, hier sauberer abfangen).
+    const int min_len = 256 * 1024;
+    const int max_len = (int)upd->size - 0x1000;
+    if (req->content_len < min_len || req->content_len > max_len) {
+        ESP_LOGW(TAG, "OTA rejected: content_len=%d out of range [%d, %d]",
+                 req->content_len, min_len, max_len);
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "content_len out of range");
+        return ESP_FAIL;
+    }
+    ESP_LOGW(TAG, "OTA: writing to '%s' (size %u, content_len %d)",
+             upd->label, (unsigned)upd->size, req->content_len);
 
     esp_ota_handle_t h = 0;
     esp_err_t err = esp_ota_begin(upd, OTA_SIZE_UNKNOWN, &h);
@@ -563,6 +748,16 @@ static esp_err_t h_ota(httpd_req_t *req)
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "ota_begin");
         return ESP_FAIL;
     }
+
+    // Image-Header-Akkumulation: erste 288 Bytes =
+    // esp_image_header(24) + segment_header(8) + esp_app_desc(256).
+    // Bei magic-Mismatch (kein ESP-Image) oder project_name-Mismatch
+    // (z.B. CULFW32-Image versehentlich hochgeladen) → abort.
+    uint8_t hdr_buf[288];
+    size_t  hdr_filled    = 0;
+    bool    hdr_validated = false;
+    char    new_version[33]      = {0};
+    char    new_project[33]      = {0};
 
     char buf[1024];
     int  remaining = req->content_len;
@@ -576,6 +771,46 @@ static esp_err_t h_ota(httpd_req_t *req)
             httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "recv error");
             return ESP_FAIL;
         }
+
+        // Header sammeln bis vollständig.
+        if (!hdr_validated) {
+            size_t take = sizeof(hdr_buf) - hdr_filled;
+            if (take > (size_t)r) take = (size_t)r;
+            memcpy(hdr_buf + hdr_filled, buf, take);
+            hdr_filled += take;
+            if (hdr_filled == sizeof(hdr_buf)) {
+                const esp_app_desc_t *new_d =
+                    (const esp_app_desc_t *)&hdr_buf[32];
+                if (new_d->magic_word != ESP_APP_DESC_MAGIC_WORD) {
+                    esp_ota_abort(h);
+                    ESP_LOGE(TAG, "OTA: bad magic 0x%08x — not an ESP image",
+                             (unsigned)new_d->magic_word);
+                    httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST,
+                                        "not an ESP image (magic mismatch)");
+                    return ESP_FAIL;
+                }
+                snprintf(new_version, sizeof(new_version), "%.*s",
+                         (int)sizeof(new_d->version), new_d->version);
+                snprintf(new_project, sizeof(new_project), "%.*s",
+                         (int)sizeof(new_d->project_name), new_d->project_name);
+
+                const esp_app_desc_t *cur_d = esp_app_get_description();
+                if (strncmp(new_d->project_name, cur_d->project_name,
+                            sizeof(new_d->project_name)) != 0) {
+                    esp_ota_abort(h);
+                    ESP_LOGE(TAG, "OTA: project_name mismatch: "
+                                  "image='%s' running='%.32s'",
+                             new_project, cur_d->project_name);
+                    httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST,
+                                        "project_name mismatch");
+                    return ESP_FAIL;
+                }
+                ESP_LOGW(TAG, "OTA: image='%s' v%s (running v%.32s)",
+                         new_project, new_version, cur_d->version);
+                hdr_validated = true;
+            }
+        }
+
         if (esp_ota_write(h, buf, r) != ESP_OK) {
             esp_ota_abort(h);
             httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "ota_write");
@@ -583,6 +818,12 @@ static esp_err_t h_ota(httpd_req_t *req)
         }
         remaining -= r;
         written   += r;
+    }
+    if (!hdr_validated) {
+        // Upload zu klein, esp_app_desc nie gelesen — defensiv.
+        esp_ota_abort(h);
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "image too small");
+        return ESP_FAIL;
     }
     if (esp_ota_end(h) != ESP_OK) {
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "ota_end");
@@ -592,11 +833,16 @@ static esp_err_t h_ota(httpd_req_t *req)
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "set_boot");
         return ESP_FAIL;
     }
-    ESP_LOGW(TAG, "OTA done — %d bytes — rebooting in 500 ms", written);
+    ESP_LOGW(TAG, "OTA done — %d bytes — rebooting to v%s in 500 ms",
+             written, new_version);
 
     httpd_resp_set_type(req, "application/json");
-    char j[80];
-    int n = snprintf(j, sizeof(j), "{\"ota\":\"ok\",\"bytes\":%d}", written);
+    char j[200];
+    const esp_app_desc_t *cur_d = esp_app_get_description();
+    int n = snprintf(j, sizeof(j),
+                     "{\"ota\":\"ok\",\"bytes\":%d,"
+                     "\"from\":\"%.32s\",\"to\":\"%s\"}",
+                     written, cur_d->version, new_version);
     httpd_resp_send(req, j, n);
     xTaskCreate(delayed_reboot_task, "reboot-ota", 2048, NULL, 5, NULL);
     return ESP_OK;
@@ -657,8 +903,7 @@ static esp_err_t h_tasks(httpd_req_t *req)
 static esp_err_t h_coredump_get(httpd_req_t *req)
 {
     size_t addr = 0, size = 0;
-    esp_err_t e = esp_core_dump_image_check();
-    if (e != ESP_OK) {
+    if (!s_coredump_present) {
         httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "no coredump");
         return ESP_FAIL;
     }
@@ -702,8 +947,45 @@ static esp_err_t h_coredump_delete(httpd_req_t *req)
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, msg);
         return ESP_FAIL;
     }
+    s_coredump_present = false;
     httpd_resp_set_type(req, "application/json");
     return httpd_resp_send(req, "{\"erased\":true}", 15);
+}
+
+// ───── /api/update/check — Online-Update-Verfügbarkeits-Check ──────────
+//
+// GET ohne Query: liefert den letzten gecachten Status (oder "idle" falls
+// nie gechecked).  GET mit ?refresh=1 oder POST: triggert einen frischen
+// HTTPS-Pull von manifest.json gegen den Public-Webflasher-Server.
+// Antwort-Format siehe ota_check_status_json().
+
+static esp_err_t h_update_check(httpd_req_t *req)
+{
+    bool refresh = false;
+    if (req->method == HTTP_POST) {
+        refresh = true;
+    } else {
+        char qbuf[32];
+        if (httpd_req_get_url_query_str(req, qbuf, sizeof(qbuf)) == ESP_OK) {
+            char v[8];
+            if (httpd_query_key_value(qbuf, "refresh", v, sizeof(v)) == ESP_OK
+                && v[0] && v[0] != '0') {
+                refresh = true;
+            }
+        }
+    }
+
+    if (refresh) ota_check_refresh();   // synchron, kann ~1-3s blockieren
+
+    char body[320];
+    int n = ota_check_status_json(body, sizeof(body));
+    if (n < 0) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "status buffer too small");
+        return ESP_FAIL;
+    }
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    return httpd_resp_send(req, body, n);
 }
 
 // ───── init ─────────────────────────────────────────────────────────────
@@ -712,10 +994,20 @@ esp_err_t webui_init(uint16_t port)
 {
     if (s_http) return ESP_OK;
 
+    // Coredump-Check einmalig beim Init seeden — alle anschließenden
+    // h_status / h_coredump_get nutzen die Cache-Variable.
+    s_coredump_present = (esp_core_dump_image_check() == ESP_OK);
+
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
     cfg.server_port    = port ? port : 80;
     cfg.lru_purge_enable = true;
     cfg.max_uri_handlers = 26;          // 4 static + 11 api + 5 captive + headroom
+    // Default 7 ist zu viel für LWIP_MAX_SOCKETS=16 wenn 3 Listener-Sinks
+    // ihrerseits 4 Clients halten dürfen. 4 reicht für realistische
+    // Web-UI-Last (1-3 Browser-Tabs) und lässt Reserve für die Sinks.
+    // Stress-Test 2026-05-25 hat den vorigen Default-7 unter Connect-Storm
+    // als HTTP-Server-Killer identifiziert.
+    cfg.max_open_sockets = 4;
     cfg.recv_wait_timeout = 30;
     cfg.send_wait_timeout = 30;
     // IDF-Default-Stack 4096 reicht für h_ota nicht: 1024 B Recv-Buffer auf
@@ -747,6 +1039,11 @@ esp_err_t webui_init(uint16_t port)
     u = (httpd_uri_t){ .uri = "/api/tasks",                .method = HTTP_GET,    .handler = h_tasks            }; httpd_register_uri_handler(s_http, &u);
     u = (httpd_uri_t){ .uri = "/api/coredump",             .method = HTTP_GET,    .handler = h_coredump_get     }; httpd_register_uri_handler(s_http, &u);
     u = (httpd_uri_t){ .uri = "/api/coredump",             .method = HTTP_DELETE, .handler = h_coredump_delete  }; httpd_register_uri_handler(s_http, &u);
+    u = (httpd_uri_t){ .uri = "/api/update/check",         .method = HTTP_GET,    .handler = h_update_check     }; httpd_register_uri_handler(s_http, &u);
+    u = (httpd_uri_t){ .uri = "/api/update/check",         .method = HTTP_POST,   .handler = h_update_check     }; httpd_register_uri_handler(s_http, &u);
+    u = (httpd_uri_t){ .uri = "/api/auth/status",          .method = HTTP_GET,    .handler = h_auth_status      }; httpd_register_uri_handler(s_http, &u);
+    u = (httpd_uri_t){ .uri = "/api/auth/token",           .method = HTTP_POST,   .handler = h_auth_token_post  }; httpd_register_uri_handler(s_http, &u);
+    u = (httpd_uri_t){ .uri = "/api/auth/token",           .method = HTTP_DELETE, .handler = h_auth_token_delete }; httpd_register_uri_handler(s_http, &u);
 
     // Captive-Portal-Probes — Android, Apple, Windows.  Antwort = 302 → "/".
     u = (httpd_uri_t){ .uri = "/generate_204",      .method = HTTP_GET, .handler = h_captive_redirect }; httpd_register_uri_handler(s_http, &u);

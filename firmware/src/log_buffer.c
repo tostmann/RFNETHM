@@ -19,6 +19,7 @@ typedef struct {
 
 static lb_line_t          s_lines[LB_MAX_LINES];
 static uint32_t           s_head_seq;          // next seq to write
+static uint32_t           s_dropped_pending;   // unsynced count of contention-drops
 static SemaphoreHandle_t  s_mtx;
 static vprintf_like_t     s_orig_vprintf;
 
@@ -71,11 +72,28 @@ static int log_hook(const char *fmt, va_list ap)
     if (nl) *nl = '\0';
 
     if (s_mtx && xSemaphoreTake(s_mtx, 0) == pdTRUE) {
+        // Falls vorher Drops aufgelaufen sind: einen Marker-Eintrag
+        // einschieben, damit der Log-Reader weiß, dass Zeilen fehlen.
+        if (s_dropped_pending) {
+            uint32_t dropped = s_dropped_pending;
+            s_dropped_pending = 0;
+            size_t idx = s_head_seq % LB_MAX_LINES;
+            s_lines[idx].ts_ms = esp_log_timestamp();
+            snprintf(s_lines[idx].msg, sizeof(s_lines[idx].msg),
+                     "<%u log lines dropped (mutex contention)>",
+                     (unsigned)dropped);
+            s_head_seq++;
+        }
         size_t idx = s_head_seq % LB_MAX_LINES;
         s_lines[idx].ts_ms = esp_log_timestamp();
         strlcpy(s_lines[idx].msg, tmp, sizeof(s_lines[idx].msg));
         s_head_seq++;
         xSemaphoreGive(s_mtx);
+    } else if (s_mtx) {
+        // Reader hält den Mutex; statt blocken (innerhalb eines ESP_LOG-
+        // Callbacks wäre das gefährlich) nur den Counter inkrementieren.
+        // Nicht atomar — bei seltener Contention akzeptabel.
+        s_dropped_pending++;
     }
     return rc;
 }

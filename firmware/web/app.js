@@ -544,6 +544,33 @@ tick();
 setInterval(tick, 2000);
 // Console-Tab-Polling startet nur wenn der Tab aktiviert ist (s.o.).
 
+// ───── Online-Update-Check ─────────────────────────────────────────────
+// Beim Page-Load 1× refresh=1 anstoßen (Device fetcht install.busware.de/
+// rfnethm/manifest.json), danach alle 6 h cached neu prüfen.  Wenn
+// update_available true ist, brand-update-Badge in der Navbar zeigen
+// und mit der gefundenen Version beschriften.
+async function checkForUpdate(forceRefresh) {
+  try {
+    const url = forceRefresh ? "/api/update/check?refresh=1" : "/api/update/check";
+    const r = await fetch(url, { cache: "no-store" });
+    if (!r.ok) return;
+    const j = await r.json();
+    const el = $("brand-update");
+    if (!el) return;
+    if (j.update_available && j.available) {
+      el.textContent = "⬆ v" + j.available;
+      el.title = `Neuere Firmware v${j.available} verfügbar (aktuell v${j.current}). Klick öffnet den Webflasher.`;
+      el.classList.remove("brand-update-hidden");
+    } else {
+      el.classList.add("brand-update-hidden");
+    }
+  } catch (e) { /* network failure: badge bleibt hidden */ }
+}
+// Initial-Check kurz nach Boot warten (WiFi muss up sein), dann
+// periodisch alle 6 h.
+setTimeout(() => checkForUpdate(true), 2500);
+setInterval(() => checkForUpdate(true), 6 * 60 * 60 * 1000);
+
 // ───── Theme-Toggle ─────────────────────────────────────────────────────
 // Inline-Script im <head> setzt data-theme schon vor dem ersten Paint
 // (FOUC-frei) und nutzt localStorage 'rfnethm-theme'.  Hier nur noch:

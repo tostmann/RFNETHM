@@ -43,6 +43,12 @@
 #define HMU_CRC_POLY       0x8005
 #define HMU_CRC_INIT       0xd77f
 
+/* Boot-Probe-Payloads für source_usb / source_uart.  IDENTIFY auf
+ * dst=COMMON erfragt den App-Tag; CHANGE_APP auf dst=OS triggert den
+ * BL→App-Switch (Legacy-Pfad für HM-MOD-RPI-PCB / Co_CPU_BL). */
+extern const uint8_t HMU_PL_IDENTIFY[1];    /* { 0x01 } */
+extern const uint8_t HMU_PL_CHANGE_APP[1];  /* { 0x03 } */
+
 /* For RFNETHM v0.3 we keep the buffer modest — DualCoPro practical max
  * is ~300 bytes per the CUL32-HM live observations.  bmcond uses 1024. */
 #define HMU_MAX_PAYLOAD    512

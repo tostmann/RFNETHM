@@ -8,8 +8,8 @@ static const char *TAG = "sink-dbg";
 static void on_rx(sink_t *s, const uint8_t *data, size_t len)
 {
     (void)s;
-    ESP_LOGI(TAG, "fanout %u bytes:", (unsigned)len);
-    ESP_LOG_BUFFER_HEXDUMP(TAG, data, len, ESP_LOG_INFO);
+    ESP_LOGD(TAG, "fanout %u bytes:", (unsigned)len);
+    ESP_LOG_BUFFER_HEXDUMP(TAG, data, len, ESP_LOG_DEBUG);
 }
 
 static const char *describe(sink_t *s) { (void)s; return "debug-hexdump"; }
