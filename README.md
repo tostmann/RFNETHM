@@ -11,10 +11,20 @@ zu einem netzwerkweit erreichbaren BidCoS-/HmIP-Frontend für FHEM,
 Homegear, piVCCU oder RaspberryMatic — ohne dass eine echte CCU oder
 ein Pi am Funk-Standort stehen muss.
 
-Status: **Firmware v0.14.90** (2026-05-11), Devkit-Bringup abgeschlossen,
+Status: **Firmware v0.15.0** (2026-05-25), Devkit-Bringup abgeschlossen,
 alle vier Kreuze der Ground-Truth-Matrix (HB-RF-ETH × {HM-MOD,
-RPI-RF-MOD} und RFNETHM × {HM-MOD, RPI-RF-MOD}) live ge-flasht. Eigenes
-PCB ist in Planung.
+RPI-RF-MOD} und RFNETHM × {HM-MOD, RPI-RF-MOD}) live ge-flasht. Multi-Client-
+Stress-Test (4 HMU + 3 raw-UART + UDP + HTTP-Poll @5 Hz parallel) über
+mehrere Minuten ohne HTTP-Aussetzer, ohne Reconnect-Storm, Uptime
+ungebrochen. v0.15.0 bringt OTA-Update-Badge (WebUI zeigt automatisch
+wenn auf [`install.busware.de/rfnethm/`](https://install.busware.de/rfnethm/)
+eine neuere Firmware verfügbar ist) und einen vergrößerten LWIP-Socket-Pool
+gegen Reconnect-Storms. Eigenes PCB ist in Planung.
+
+Flashen geht am bequemsten über den **Browser-Webflasher** unter
+[`https://install.busware.de/rfnethm/`](https://install.busware.de/rfnethm/) —
+ESP32-S3 anstecken, *Connect*, fertig.  Updates kommen danach OTA übers
+WebUI; das Gerät meldet selbst wenn eine neue Version online ist.
 
 ---
 
@@ -59,7 +69,7 @@ direkt auf den 40-Pin-Header — selber Adapter, gleicher Server-Pfad.
 | **TCP 2330** | HMUARTLGW | FHEM `CUL_HM`, Homegear, jeder Stack der eine HM-MOD-RPI-PCB-Bridge erwartet |
 | **TCP 2329** | Raw-Bytestream | bmcond, eigene Tools, Reverse-Engineering |
 | **HTTP 80** | WebUI + REST | Status, OTA-Update, WLAN-Setup, Live-Log |
-| **mDNS** | `_raw-uart._udp:3008` | Auto-Discovery (`rfnethm-XXXX.local`) |
+| **mDNS** | `_raw-uart._udp:3008` | Auto-Discovery (`rfnethm-XXXX.local` + Alias `rfnethm.local`) |
 
 Eingehende Funk-Frames werden gleichzeitig an alle verbundenen Clients
 gespiegelt.  Senden ist mit einem **TX-Master-Soft-Lock** gegen
@@ -87,22 +97,26 @@ Mehrfach-Schreiber abgesichert (erster Sender bekommt den Stick für
 
 ## Inbetriebnahme (Kurz)
 
-1. **Flashen.** Zwei Wege — entweder Source-Build via PlatformIO,
-   oder direkt eines der vorgebackenen Binaries (siehe Section
-   [Vorgebackene Binaries](#vorgebackene-binaries-flash-via-esptool)
-   unten) per `esptool`.
+1. **Flashen.** Drei Wege, von "einfach" nach "Source-Build":
 
-   ```sh
-   # Source-Build:
-   pio run -e rfnethm -t upload
-   ```
+   - **Webflasher (empfohlen)** — Browser auf
+     [`https://install.busware.de/rfnethm/`](https://install.busware.de/rfnethm/)
+     öffnen, ESP32-S3 per USB anstecken, **Connect** klicken. Funktioniert
+     auf Chrome / Edge / Opera (Web-Serial-API).  Kein lokaler Build,
+     keine PlatformIO-Installation nötig.
+   - **CLI mit fertigem Image** — siehe
+     [Vorgebackene Binaries](#vorgebackene-binaries-flash-via-esptool) unten.
+   - **Source-Build via PlatformIO**:
+     ```sh
+     pio run -e rfnethm -t upload
+     ```
 2. **WLAN provisionieren.** Zwei Wege:
    - **Improv-Serial**: Browser → improv-wifi.com → ESP über die
      Console-USB-Buchse verbinden → Credentials eingeben.
    - **Captive-AP-Fallback**: erscheint nach 30 s als WLAN
      `RFNetHM XXXX`, Handy verbindet sich, jede HTTP-Anfrage landet
      im Setup-Formular.
-3. **Im WebUI** (`http://rfnethm-XXXX.local`) Status checken; alle
+3. **Im WebUI** (`http://rfnethm.local` oder `http://rfnethm-XXXX.local`) Status checken; alle
    Funk-Frames stehen sofort am Netzwerk-Port bereit.
 4. **Server-Seite** konfigurieren:
    - piVCCU / RaspberryMatic: `hb_rf_eth.ko` mit der IP des RFNETHM laden
@@ -114,32 +128,37 @@ Mehrfach-Schreiber abgesichert (erster Sender bekommt den Stick für
 
 ## Vorgebackene Binaries (Flash via esptool)
 
-Wer nicht selbst bauen will, findet unter
-[`binaries/`](binaries/) zwei fertige Builds des jeweils aktuellen
-Public-Release:
+Für CLI-Nutzer, die keinen Web-Serial-fähigen Browser haben oder den
+Flash skripten wollen, liegen unter [`webflasher/`](webflasher/) im
+Repo dieselben Images, die auch der Webflasher serviert:
 
-- **`rfnethm-vX.Y.Z-factory.bin`** — Komplett-Image (bootloader +
-  partition-table + ota_data + Applikation).  Erst-Flash für ein
-  jungfräuliches oder anders belegtes ESP32-S3.
-- **`rfnethm-vX.Y.Z-ota.bin`** — nur die Applikation (offset
-  `0x10000`).  Für OTA-Updates über die WebUI, oder als gezielter
-  Re-Flash auf bereits provisioniertes Gerät.
+- **`webflasher/factory_rfnethm_esp32s3.bin`** — Komplett-Image
+  (bootloader + partition-table + ota_data + Applikation).  Erst-Flash
+  für ein jungfräuliches oder anders belegtes ESP32-S3.
+- **`webflasher/firmware_rfnethm_esp32s3.bin`** — nur die Applikation
+  (offset `0x10000`).  Für OTA-Updates über die WebUI, oder als
+  gezielter Re-Flash auf bereits provisioniertes Gerät.
+
+Image-Inhalt ist deckungsgleich mit dem aktuellen Release-Tag und der
+Version, die der Webflasher unter
+[`https://install.busware.de/rfnethm/`](https://install.busware.de/rfnethm/)
+ausliefert (siehe `webflasher/manifest.json`).
 
 ```sh
 # 1) Erst-Flash via USB (ESP32-S3 im Download-Mode — BOOT-Button halten,
 #    RESET kurz, BOOT loslassen).  Port-Pfad gegebenenfalls anpassen.
 esptool.py --chip esp32s3 --port /dev/ttyACM0 --baud 921600 \
-    write_flash 0x0 binaries/rfnethm-v0.14.111-factory.bin
+    write_flash 0x0 webflasher/factory_rfnethm_esp32s3.bin
 
 # 2) OTA-Update via WebUI (empfohlen sobald das Gerät im Netz ist —
 #    kein Druck auf BOOT-Button nötig, keine USB-Verbindung):
-curl -X POST --data-binary @binaries/rfnethm-v0.14.111-ota.bin \
+curl -X POST --data-binary @webflasher/firmware_rfnethm_esp32s3.bin \
     http://rfnethm-XXXX.local/api/ota
 
 # 3) Reiner Re-Flash der Anwendung über USB (ohne Partition-Tabelle
 #    anzufassen — z.B. wenn nur ein neuer Build aufgespielt werden soll):
 esptool.py --chip esp32s3 --port /dev/ttyACM0 --baud 921600 \
-    write_flash 0x10000 binaries/rfnethm-v0.14.111-ota.bin
+    write_flash 0x10000 webflasher/firmware_rfnethm_esp32s3.bin
 ```
 
 `esptool.py` liegt bei PlatformIO bei (`~/.platformio/penv/bin/esptool.py`)
@@ -150,10 +169,18 @@ ist der Port-Pfad entsprechend `/dev/cu.usbmodem*` bzw. `COMx`.
 
 ## WebUI
 
-Die eingebaute Web-Oberfläche unter `http://rfnethm-XXXX.local/` zeigt
+Die eingebaute Web-Oberfläche ist unter `http://rfnethm.local/`
+erreichbar (kurzer Alias, gedacht für den Normalfall mit einem Stick im
+Netz) bzw. unter dem eindeutigen `http://rfnethm-XXXX.local/` (XXXX =
+letzte 4 Hex-Stellen der MAC, stabiler Pfad).  Sie zeigt
 Sources, Sinks und System-Status als Kachel-Dashboard — inklusive
 Reset-Reason, Heap- und Stack-HWM-Indikator für den Dauerlauf-Betrieb,
 TX-Master-Soft-Lock pro Sink, Live-Log, OTA-Update und WLAN-Provisioning.
+
+> Falls mehrere RFNETHM-Sticks am gleichen LAN hängen: `rfnethm.local`
+> wird von beiden gleichzeitig beworben — welcher tatsächlich antwortet,
+> hängt vom mDNS-Race ab.  Wer eindeutig ansprechen will, nimmt
+> `rfnethm-XXXX.local`.
 Light- und Dark-Theme sind per Toggle in der Headbar umschaltbar, die
 Wahl wird pro Browser persistiert; ohne explizite Wahl folgt das
 Theme der OS-Präferenz (`prefers-color-scheme`).
