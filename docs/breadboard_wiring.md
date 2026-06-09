@@ -21,8 +21,7 @@ RFNETHM/CDC2NET = Dual-OTA, BER = single-app + 12,7 MB LittleFS.
 ## eQ3-Modul-Pinout (40-pin-Header, RPi-HAT-kompatibel)
 
 **Korrigiert 2026-05-07** nach Sichtung des ELV-Original-Schaltplans
-(`schematics/hm_rpi_pcb_schaltplan.pdf`) und User-Verifikation am
-RPi-RF-MOD-Pinout.
+und User-Verifikation am RPi-RF-MOD-Pinout.
 
 | eQ3-Pin | RPi-BCM | Signal | Richtung | Welches Modul |
 |---|---|---|---|---|
