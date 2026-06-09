@@ -24,8 +24,8 @@ festschreiben:
 - ESP32 (Original) und ESP32-P4: haben internen EMAC mit RMII-Interface,
   bräuchten aber externen PHY (LAN8720 / RTL8201).
 
-Solange RFNETHM bei ESP32-C6-MINI-1 bleibt (Konsistenz mit PIIF11
-und CULFW32), ist SPI-Ethernet der Pfad.
+RFNETHM nutzt **ESP32-S3-WROOM-1-N16R2** — kein interner EMAC (verifiziert
+Espressif-DS) → SPI-Ethernet ist der Pfad.
 
 ## SPI-Ethernet-Kandidaten
 
@@ -46,16 +46,59 @@ on-board haben.
 
 ## SPI-Bus-Sharing
 
-Auf dem ESP32-C6 ist der einzige sinnvolle SPI-Bus FSPI (User-SPI).
-Wenn das HM-Modul kein SPI braucht (HM-MOD-RPI-PCB ist UART-only,
-Type-7-Frames laufen über UART) → kein Konflikt, FSPI exklusiv für
-W5500. PIIF11-Pinout reserviert SPI0 für HAT-SPI; in einem
-**Stick-Formfaktor ohne Pi-Header** ist diese Reservierung obsolet,
-SPI darf an der gleichen Pin-Gruppe an den W5500 gehen.
+Auf dem ESP32-S3 ist **SPI2 (FSPI)** der User-SPI-Bus. Das HM-Modul
+braucht keinen SPI (HM-MOD-RPI-PCB ist UART-only, Type-7-Frames laufen
+über UART) → kein Konflikt, FSPI exklusiv für den W5500.
+
+## W5500-Pinout (verbindlich, 2026-06-09)
+
+**Überschreibt den „nichts final"-Disclaimer oben — dieser Pinout ist
+festgelegt** und gilt **identisch für RFNETHM und das Schwesterprojekt
+CDC2NET** auf der geteilten PCB.
+
+SPI2/FSPI an den **IO-MUX-Direktpins** des ESP32-S3-WROOM-1-N16R2:
+
+| W5500-Signal | ESP32-S3 GPIO | IO-MUX-Funktion | Richtung | Hinweis |
+|---|---|---|---|---|
+| SCLK  | `GPIO12` | FSPICLK  | MCU → W5500 | IO-MUX-direkt |
+| MOSI  | `GPIO11` | FSPID    | MCU → W5500 | IO-MUX-direkt |
+| MISO  | `GPIO13` | FSPIQ    | W5500 → MCU | IO-MUX-direkt |
+| SCSn  | `GPIO10` | FSPICS0  | MCU → W5500 | HW-CS, aktiv-low |
+| INTn  | `GPIO14` | (FSPIWP, ungenutzt) | W5500 → MCU | aktiv-low/open-drain → Pull-up, Falling-Edge-IRQ |
+| RSTn  | `GPIO21` | —        | MCU → W5500 | aktiv-low, ≥500 µs Power-up-Pulse, danach Output-HIGH halten |
+
+GPIO-Funktionen verifiziert gegen das ESP32-S3-WROOM-1-Datasheet
+(Tab. 3-1, Stand 2026-06-09).
+
+**Warum diese Pins:**
+
+- **IO-MUX statt GPIO-Matrix.** GPIO10–14 sind die FSPI-Direktpins →
+  umgehen die 2-Stufen-Matrix-Verzögerung. Matrix-SPI ist real auf
+  ~40 MHz begrenzt, IO-MUX trägt bis 80 MHz. W5500 ist bis 80 MHz
+  spezifiziert, auf Modulen real ~33–40 MHz robust. **Start bei 20 MHz**,
+  dann hochtasten + per `ping`/Durchsatz validieren.
+- **GPIO10–14 sind frei** und contiguous: nicht im HM-Block (`4–9, 15–18`),
+  keine Strapping-Pins (`0/3/45/46`), kein in-package-Flash (`26–32`),
+  nicht USB-OTG (`19/20`) / UART0 (`43/44`) → cleane Trace-Gruppe.
+- **Bewusst NICHT GPIO35–37**: am N16R2 (Quad-PSRAM) zwar frei, aber am
+  CDC2NET-Devkit YD-V1.4 (R8/Octal-PSRAM) vom PSRAM belegt. GPIO10–14
+  sind auf **beiden** frei → identischer W5500-Code auf Devkit und PCB
+  (geteilte-Plattform-Pflicht).
+- **GPIO39–42 freigehalten** für einen optionalen JTAG-Header (S3 = Xtensa
+  → JTAG, nicht SWD).
+- Danach belegt für den TPS2065C-OTG-Switch (festgelegt 2026-06-09):
+  **EN=`GPIO1`**
+  (active-high, ext. Pull-down), **FLT/OC̄=`GPIO2`** (ext. Pull-up),
+  **Status-LED=`GPIO38`**. Spare: `GPIO47`, `GPIO48`.
+
+**ESP-IDF-Anbindung:** `SPI2_HOST` + `esp_eth` mit `eth_w5500`-Driver;
+`eth_w5500_config_t.int_gpio_num = 14` (echter INT statt Polling →
+niedrigere Latenz/CPU); RSTn (`GPIO21`) vor `esp_eth_driver_install`
+manuell pulsen; SPI-Mode 0, `clock_speed_hz` initial 20 MHz.
 
 ## Power-Budget
 
-- ESP32-C6-MINI-1: TX-Peak ~280 mA bei WiFi.
+- ESP32-S3 (WROOM-1): WiFi-TX-Peak ~300 mA.
 - HM-MOD-RPI-PCB / RPI-RF-MOD: TX-Peak < 50 mA.
 - W5500: typ. ~130 mA, peak ~150 mA bei 100BASE-TX-TX-Aktivität laut
   Wiznet-Datenblatt — Wert vor Layout im Datenblatt nachschlagen.
@@ -83,8 +126,9 @@ Improv-Provisioning-Story sauber hält.
 - Soll der USB-Port ausschließlich Strom liefern, oder zusätzlich eine
   USB-Serial-Console über CP21x-Bridge? (Nicht den `hb_rf_usb_2`-Klon-Pfad,
   sondern als banaler Debug-Output.)
-- Form: USB-A-Stecker direkt am Board (klassischer Stick-Look) oder
-  USB-C-Buchse + RJ45-Buchse als kleines Box-Gehäuse?
+- Form: **entschieden 2026-06-09** → vertikaler USB-C-Stecker (OTG-Host,
+  Busware-Sticks direkt) + USB-C-Buchse (CP2102N-Console/Power) +
+  RJ45-Buchse; Box-Gehäuse.
 - mDNS-Service-Type — `_raw-uart._udp` (HB-RF-ETH) bleibt; soll zusätzlich
   `_rfnethm._tcp` o.ä. mit Capabilities-Record exportiert werden?
 - HmIP-RFUSB-formatkompatibles Gehäuse anstreben (Ergonomie) oder eigenes

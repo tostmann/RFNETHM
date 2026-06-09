@@ -12,7 +12,7 @@ flowchart LR
 
     CP <-->|USB-OTG-FS| SRC
 
-    subgraph RFNETHM["RFNETHM (ESP32-S3 + 8 MB Flash)"]
+    subgraph RFNETHM["RFNETHM (ESP32-S3-WROOM-1-N16R2 + 16 MB Flash)"]
         direction LR
         SRC["source_usb<br/>HMUARTLGW-Codec<br/>CRC16-0x8005"]
         BR{{"bridge.c<br/>fanout + TX-master-lock"}}

@@ -86,8 +86,8 @@ Mehrfach-Schreiber abgesichert (erster Sender bekommt den Stick für
     (eigener on-board-LDO, kein 3V3-Pfad), oder
   - HM-MOD-RPI-PCB am 40-Pin-Header — 3,3 V auf Pin 1 reicht
 - **ESP32-S3-Devkit** mit nativem USB-OTG-PHY (z.B. YD-ESP32-S3 V1.4)
-  und Pin-Header für den HM-Modul-Slot.  Ein eigenes PCB (ESP32-S3-MINI-1
-  + W5500 + USB-A + HM-Slot) ist in Vorbereitung.
+  und Pin-Header für den HM-Modul-Slot.  Ein eigenes PCB (ESP32-S3-WROOM-1-N16R2
+  + W5500 + vertikaler USB-C-OTG-Stecker + HM-Slot) ist in Vorbereitung.
 - **5 V / 200 mA** Versorgung über die zweite USB-C-Buchse am Devkit.
   Wer RPI-RF-MOD nutzt, muss zusätzlich 5 V auf den HM-Header (Pin 2/4)
   durchziehen — siehe [`docs/breadboard_wiring.md`](docs/breadboard_wiring.md).

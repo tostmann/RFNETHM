@@ -91,8 +91,9 @@ Live-Console.
   PCB bekommt zusätzlich W5500
 - 5 V / 200 mA Versorgung
 
-Die eigene PCB-Variante (ESP32-S3-MINI-1-N8 + W5500 + USB-A für den
-Stick) ist geplant; bis dahin läuft alles am ESP32-S3-Devkit, siehe
+Die eigene PCB-Variante (ESP32-S3-WROOM-1-N16R2 + W5500 + vertikaler
+USB-C-OTG-Stecker für den Stick + USB-C-Buchse für CP2102N-Console) ist
+geplant; bis dahin läuft alles am ESP32-S3-Devkit, siehe
 `docs/breadboard_wiring.md` für die Verkabelung.
 
 ## Mehr lesen

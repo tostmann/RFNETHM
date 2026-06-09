@@ -2,30 +2,21 @@
 
 Stand: 2026-05-07.  Ziel: HM-Modul am Breadboard ohne PCB-Spin testen, dabei
 GPIO-Auswahl so treffen, dass spätere Übernahme aufs PCB-Design mit
-**ESP32-S3-MINI-1-N8** **ohne** Firmware-Pin-Define-Änderung läuft.
+**ESP32-S3-WROOM-1-N16R2** **ohne** Firmware-Pin-Define-Änderung läuft.
 
-## Speicher-Eignung ESP32-S3-MINI-1-N8
+## Speicher-Eignung ESP32-S3-WROOM-1-N16R2
 
-| Resource | N8 | RFNETHM-Bedarf | Verdict |
+| Resource | N16R2 | RFNETHM-Bedarf | Verdict |
 |---|---|---|---|
-| Flash | 8 MB Quad SPI | aktuell `firmware.bin` = ~976 KB | comfortable |
+| Flash | 16 MB Quad SPI | RFNETHM ~976 KB; BER 12,7 MB LittleFS | comfortable |
 | SRAM | 512 KB | ~300 KB DRAM-Heap nach IDF+Wi-Fi+lwIP | comfortable |
-| PSRAM | 0 | keine großen Buffer (alle Frames <300 B) | ok ohne |
+| PSRAM | 2 MB Quad | von keiner FW genutzt — Reserve | bleibt **AUS** (`# CONFIG_SPIRAM`) |
 | ROM | 384 KB | Boot+Lib | n/a |
 
-**Aber:** aktuelle `partitions_ota.csv` ist 16 MB-Layout (2× 3 MB OTA).  Für
-N8 muss neu zugeschnitten werden:
-
-```
-nvs       0x9000   0x6000     # 24K
-otadata   0xf000   0x2000
-phy_init  0x11000  0x1000
-ota_0     0x20000  0x1E0000   # 1.875 MB
-ota_1     0x200000 0x1E0000   # 1.875 MB
-storage   0x3E0000 0x20000    # 128K spare
-```
-→ ~1.9 MB pro OTA-Slot (50% Reserve über aktuellem FW).  Erst portieren
-**wenn** PCB-Bringup ansteht.
+Production-Flash ist **16 MB** (= Devkit) → RFNETHMs bestehendes
+`partitions_ota.csv` (2× 3 MB OTA + Storage) bleibt **unverändert**,
+kein Neuschnitt. Jede der drei Firmwares flasht ihr eigenes Layout:
+RFNETHM/CDC2NET = Dual-OTA, BER = single-app + 12,7 MB LittleFS.
 
 ## eQ3-Modul-Pinout (40-pin-Header, RPi-HAT-kompatibel)
 
@@ -87,8 +78,9 @@ GPIO-Auswahl beachtet:
 - **SPI0/1 in-package-Flash** (`GPIO26–32`) → vermieden
 - **UART0 Console** (`GPIO43, 44`) → vermieden
 - **WS2812-RGB-LED** (`GPIO48`) auf YD V1.4 → vermieden
-- **GPIO33–37** auf MINI-1-N8 frei (Quad-SPI), aber auf YD V1.4 (WROOM-1)
-  ggf. Octal-SPI belegt → vermieden für portable Wahl
+- **GPIO35–37** am Production-WROOM-1-N16R2 (Quad-PSRAM) frei, am YD V1.4
+  (WROOM-1 mit R8/Octal-PSRAM) vom PSRAM belegt → vermieden für portable
+  Wahl. **GPIO33/34** am WROOM-1 nicht herausgeführt.
 
 | ESP32-S3 GPIO | YD V1.4 Pin | eQ3-Pin | Signal | UART/Function |
 |---|---|---|---|---|
@@ -172,28 +164,26 @@ würde ein MCU-Output dort die SiLabs-C2-Debug-Daten-Linie stören.
   Drahtbruch-Effekten anfällig — IPEX auf Stub-Antenne, Stub gerade
   nach oben, kein metallisches Material in 5 cm Radius.
 
-## PCB-Übernahme (ESP32-S3-MINI-1-N8)
+## PCB-Übernahme (ESP32-S3-WROOM-1-N16R2)
 
-**Pin-Defines bleiben unverändert.**  Alle gewählten GPIOs sind auf
-N8 verfügbar:
-- `GPIO4–9, 15–18`: bei N8 freie GPIOs (Quad-SPI, kein Octal-Konflikt)
+**Pin-Defines bleiben unverändert.**  Alle gewählten GPIOs sind am
+WROOM-1-N16R2 herausgeführt und frei:
+- `GPIO4–9, 15–18`: am WROOM-1 gebondet, kein PSRAM-Konflikt (R2=Quad)
 - Strapping-Pins werden weiterhin nicht angefasst
 - USB-OTG-Pins (`GPIO19, 20`) bleiben für USB-Connector reserviert
 
 Auf dem PCB-Design dann zusätzlich:
-- VBUS-GPIO-Switch (für Stick-Power-Cycle, siehe `pcb_basics_must_have`
-  in der memory)
+- VBUS-GPIO-Switch (für Stick-Power-Cycle)
 - Console-UART-Header
 - SWD-Header
 
 ## Verifizierung dieser Wahl
 
-- ESP32-S3-MINI-1-N8: 8 MB Flash, 512 KB SRAM, 0 PSRAM, 39 GPIO —
-  verifiziert via Espressif Datasheet (search via espressif-MCP, 2026-05-07)
-- GPIO-Restriktionen: ESP32-S3 Datasheet §2.3.4 + ESP-IDF GPIO API-Doku —
-  verifiziert via espressif-MCP 2026-05-07
-- HM-MOD-RPI-PCB-Pinout: HB-RF-ETH.pdf (`schematics/`, A.R. Rev 1.9
-  2020-06-11) + RPi-40-pin-BCM-Standard
+- ESP32-S3-WROOM-1-N16R2: 16 MB Flash, 512 KB SRAM, 2 MB Quad-PSRAM (aus),
+  36 herausgeführte GPIO, PCB-Antenne, −40…85 °C — verifiziert gegen das
+  ESP32-S3-WROOM-1-Datasheet (Tab. 1-1)
+- GPIO-Restriktionen: ESP32-S3 Datasheet §2.3.4 + ESP-IDF GPIO API-Doku
+- HM-MOD-RPI-PCB-Pinout: HB-RF-ETH-Referenz + RPi-40-pin-BCM-Standard
 
 ## Status
 
