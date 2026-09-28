@@ -1,5 +1,13 @@
 # Ethernet-Anbindung — neuer Scope ggü. PIIF/CULFW32
 
+> **Status: Ethernet is not implemented in the firmware yet.** No released
+> build (v0.15.0 included) contains a W5500 driver. The pinout below is the
+> planned wiring for the upcoming RFNETHM PCB, not a supported feature —
+> use WiFi until W5500 support is released.
+>
+> *Ethernet ist in der Firmware noch nicht implementiert. Der Pinout unten
+> ist die geplante Verdrahtung für das eigene PCB, kein nutzbares Feature.*
+
 Stand 2026-05-02. Diese Datei sammelt offene Fragen und nicht-verifizierte
 Annahmen. Nichts hier ist final, alles ist Diskussions-Stand.
 
@@ -19,8 +27,7 @@ festschreiben:
 
 - ESP32-S2 / ESP32-S3 / ESP32-C6 / ESP32-H2: Nach aktuellem Wissensstand
   **kein interner EMAC** verfügbar; Ethernet nur über externen MAC+PHY
-  am SPI-Bus. Vor finaler Festlegung im Espressif-Datenblatt verifizieren
-  (z.B. via `mcp__espressif-documentation__search_espressif_sources`).
+  am SPI-Bus. Vor finaler Festlegung im Espressif-Datenblatt verifizieren.
 - ESP32 (Original) und ESP32-P4: haben internen EMAC mit RMII-Interface,
   bräuchten aber externen PHY (LAN8720 / RTL8201).
 
@@ -51,6 +58,9 @@ braucht keinen SPI (HM-MOD-RPI-PCB ist UART-only, Type-7-Frames laufen
 über UART) → kein Konflikt, FSPI exklusiv für den W5500.
 
 ## W5500-Pinout (verbindlich, 2026-06-09)
+
+> Hardware-Festlegung für das PCB — **der Firmware-Treiber existiert noch
+> nicht** (*firmware support pending*).
 
 **Überschreibt den „nichts final"-Disclaimer oben — dieser Pinout ist
 festgelegt** und gilt **identisch für RFNETHM und das Schwesterprojekt

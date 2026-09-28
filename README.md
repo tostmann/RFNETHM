@@ -91,7 +91,9 @@ Mehrfach-Schreiber abgesichert (erster Sender bekommt den Stick für
 - **5 V / 200 mA** Versorgung über die zweite USB-C-Buchse am Devkit.
   Wer RPI-RF-MOD nutzt, muss zusätzlich 5 V auf den HM-Header (Pin 2/4)
   durchziehen — siehe [`docs/breadboard_wiring.md`](docs/breadboard_wiring.md).
-- **WLAN** im Lab — Ethernet kommt mit dem eigenen PCB-Spin.
+- **WLAN** — Ethernet (W5500) ist in der Firmware noch **nicht
+  implementiert** (*Ethernet is not supported by the firmware yet*);
+  es kommt mit dem eigenen PCB-Spin.
 
 ---
 
@@ -268,7 +270,7 @@ Pin-Header) erscheint als lokales `/dev/raw-uart`.
 - [`docs/breadboard_wiring.md`](docs/breadboard_wiring.md) — Verkabelung
   am Devkit
 - [`docs/ethernet_addition.md`](docs/ethernet_addition.md) — Ethernet-
-  Anbindung für den PCB-Spin
+  Anbindung für den PCB-Spin (geplant, Firmware-Treiber noch nicht implementiert)
 - [`docs/diagrams/`](docs/diagrams/) — Architektur- und
   Message-Flow-Diagramme
 
